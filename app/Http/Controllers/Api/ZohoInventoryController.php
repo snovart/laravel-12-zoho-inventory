@@ -212,4 +212,50 @@ class ZohoInventoryController extends Controller
         }
     }
 
+    public function getItem(string $id, \App\Services\Zoho\ZohoInventoryService $inventory): \Illuminate\Http\JsonResponse
+    {
+        try {
+            $raw = $inventory->getItem($id);
+
+            if (empty($raw)) {
+                return response()->json([
+                    'status'  => 'error',
+                    'message' => 'Item not found.',
+                ], 404);
+            }
+
+            // Normalize/minify the payload for the frontend
+            $item = [
+                'item_id'               => $raw['item_id'] ?? $id,
+                'name'                  => $raw['name'] ?? ($raw['item_name'] ?? ''),
+                'sku'                   => $raw['sku'] ?? ($raw['product_code'] ?? ''),
+                'rate'                  => $raw['rate'] ?? ($raw['selling_price'] ?? 0),
+                'track_inventory'       => (bool)($raw['track_inventory'] ?? false),
+                'can_be_sold'           => (bool)($raw['can_be_sold'] ?? true),
+                'can_be_purchased'      => (bool)($raw['can_be_purchased'] ?? false),
+
+                // Stock-related fields appear only for inventory-tracked items.
+                // We pass them if present; otherwise they will be null.
+                'available_stock'       => $raw['available_stock']        ?? ($raw['actual_available_stock'] ?? null),
+                'actual_available_stock'=> $raw['actual_available_stock'] ?? null,
+                'physical_stock'        => $raw['physical_stock']         ?? null,
+            ];
+
+            return response()->json([
+                'status' => 'ok',
+                'data'   => $item,
+            ]);
+        } catch (Throwable $e) {
+            Log::error('[Zoho] getItem failed', [
+                'id'      => $id,
+                'message' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status'  => 'error',
+                'message' => $e->getMessage(),
+            ], 422);
+        }
+    }
+
 }

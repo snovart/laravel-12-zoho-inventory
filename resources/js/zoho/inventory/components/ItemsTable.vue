@@ -1,4 +1,3 @@
-<!-- resources/js/zoho/inventory/components/ItemsTable.vue -->
 <script setup>
 /**
  * ItemsTable.vue
@@ -8,11 +7,13 @@
  * - Adds items from results and merges lines by SKU+Rate
  * - Auto-closes results after Add and focuses Qty of the last row
  * - Recomputes totals on every change
+ * - Shows stock badges and a "Create PO" toggle when qty exceeds stock
  */
 
 import { computed, ref, watch, nextTick, onMounted } from 'vue';
 import { useOrderStore } from '@inventory/stores/order';
 import { useItemsSearch } from '@inventory/composables/useItemsSearch';
+import { useItemDetails } from '@inventory/composables/useItemDetails';
 
 // Pinia store
 const store = useOrderStore();
@@ -26,6 +27,9 @@ const qtyRefs = ref([]); // filled via :ref in template
 // Search composable (API-backed)
 const { results, loading, error, search, clear } = useItemsSearch();
 const q = ref(''); // query text
+
+// Single-item details composable (API-backed)
+const { getById: getItemById } = useItemDetails(); // exposes async getById(item_id)
 
 // ------------------------------------------------------------
 // Helpers
@@ -43,6 +47,37 @@ function tryMergeLine(newLine) {
   return false;
 }
 
+/** Compute shortage: if tracked and stock is known, returns qty - stock when positive; else 0 */
+function shortfall(row) {
+  const tracked = row?.track_inventory === true;
+  const stock = Number(row?.available_stock ?? row?.actual_available_stock);
+  const qty = Number(row?.qty ?? 0);
+  if (!tracked) return 0;
+  if (!Number.isFinite(stock)) return 0;
+  return Math.max(0, qty - stock);
+}
+
+/** Recalculate default Create PO flags based on shortage */
+function recomputePOFlags() {
+  store.items.forEach((row) => {
+    const sf = shortfall(row);
+    if (sf > 0) {
+      // If shortage and purchasable → default on; respect user's manual override if already set.
+      if (row.can_be_purchased) {
+        if (typeof row.create_po === 'undefined') {
+          row.create_po = true;
+        }
+      } else {
+        // Not purchasable: ensure flag is off
+        row.create_po = false;
+      }
+    } else {
+      // No shortage → force off
+      row.create_po = false;
+    }
+  });
+}
+
 // Normalize any legacy rows (zoho_item_id -> item_id) to satisfy backend validation
 onMounted(() => {
   let changed = false;
@@ -54,6 +89,9 @@ onMounted(() => {
     return it;
   });
   if (changed) store.recomputeTotals();
+
+  // Ensure PO flags are consistent on mount
+  recomputePOFlags();
 });
 
 // ------------------------------------------------------------
@@ -69,8 +107,10 @@ function addRow() {
     rate: 0,
     tax: 0,
     // item_id intentionally empty for manual rows; will fail validation if sent
+    create_po: false,
   });
   store.recomputeTotals();
+  recomputePOFlags();
 
   // Focus last Qty after new empty row
   nextTick(() => {
@@ -84,10 +124,13 @@ function addRow() {
 function removeRow(id) {
   store.setItems(store.items.filter((i) => i.id !== id));
   store.recomputeTotals();
+  recomputePOFlags();
 }
 
 function onCellChange() {
   store.recomputeTotals();
+  // Qty / rate / tax might change shortage conditions
+  recomputePOFlags();
 }
 
 function doSearch() {
@@ -100,7 +143,11 @@ function clearSearch() {
   clear();
 }
 
-/** Map API result to line format, merge or append, then focus Qty and hide results */
+/**
+ * Map API search result to an order line.
+ * Additionally, enrich the line with item details via composable (track_inventory, can_be_purchased, stock).
+ * Then merge/append, recompute totals, and focus Qty.
+ */
 async function addFromSearch(result) {
   const price = Number(result?.rate ?? result?.selling_price ?? result?.unit_price ?? 0);
 
@@ -113,12 +160,47 @@ async function addFromSearch(result) {
     qty: 1,
     rate: price,
     tax: 0,
+    // Enriched fields (filled below if details are available)
+    track_inventory: undefined,
+    can_be_purchased: undefined,
+    available_stock: undefined,
+    // Purchase Order toggle (default is defined after enrichment)
+    create_po: undefined,
   };
+
+  // Enrich with details from /api/zoho/items/{id} via composable.
+  // This is best-effort: failure should not block adding the row.
+  try {
+    if (newLine.item_id) {
+      const details = await getItemById(newLine.item_id); // expects plain item object
+      if (details) {
+        newLine.track_inventory  = !!details.track_inventory;
+        newLine.can_be_purchased = !!details.can_be_purchased;
+        newLine.available_stock  = details.available_stock ?? details.actual_available_stock ?? null;
+      }
+    }
+  } catch (e) {
+    // Non-blocking enrich failure
+    console.warn('Item details enrich failed:', e);
+  }
+
+  // Decide default PO toggle for this row
+  try {
+    const sf = shortfall(newLine);
+    if (sf > 0 && newLine.can_be_purchased) {
+      newLine.create_po = true;
+    } else {
+      newLine.create_po = false;
+    }
+  } catch {
+    newLine.create_po = false;
+  }
 
   const merged = tryMergeLine(newLine);
   if (!merged) store.addItem(newLine);
 
   store.recomputeTotals();
+  recomputePOFlags(); // ensure consistency
   clear();
 
   await nextTick();
@@ -233,6 +315,45 @@ watch(q, (val) => {
                 class="ui-input"
                 placeholder="Item name"
               />
+              <!-- Badges and PO toggle -->
+              <div class="mt-1 text-xs text-gray-500 flex flex-wrap items-center gap-2">
+                <span
+                  v-if="row.available_stock !== undefined && row.available_stock !== null"
+                  class="inline-flex items-center rounded bg-gray-100 px-1.5 py-0.5"
+                >
+                  Stock: <span class="ml-1 font-medium text-gray-700">{{ row.available_stock }}</span>
+                </span>
+
+                <span v-if="row.track_inventory" class="inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">
+                  tracked
+                </span>
+
+                <span v-if="row.can_be_purchased" class="inline-flex items-center rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">
+                  purchasable
+                </span>
+
+                <span
+                  v-if="shortfall(row) > 0"
+                  class="inline-flex items-center rounded bg-rose-50 px-1.5 py-0.5 text-rose-700 font-medium"
+                  title="Quantity exceeds available stock"
+                >
+                  short by {{ shortfall(row) }}
+                </span>
+
+                <!-- Create PO toggle appears only when there is a shortage and the item is purchasable -->
+                <label
+                  v-if="shortfall(row) > 0 && row.can_be_purchased"
+                  class="ml-2 inline-flex items-center gap-1 text-gray-700 cursor-pointer select-none"
+                  title="Create a Purchase Order for the shortage"
+                >
+                  <input
+                    v-model="row.create_po"
+                    type="checkbox"
+                    class="h-3.5 w-3.5 rounded border-gray-300"
+                  />
+                  <span>Create PO</span>
+                </label>
+              </div>
             </td>
 
             <td class="px-3 py-2">

@@ -419,4 +419,11 @@ class ZohoInventoryService
         return $data['salesorder'] ?? [];
     }
 
+    /** Fetch a single item by item_id (full Zoho payload). */
+    public function getItem(string $itemId): array
+    {
+        $data = $this->request('GET', '/items/' . $itemId);
+        return $data['item'] ?? [];
+    }
+
 }

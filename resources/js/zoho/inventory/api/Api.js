@@ -25,6 +25,7 @@ export const API = {
 
 // --- Helpers -------------------------------------------------
 const soShowUrl = (id) => `${API.salesorders}/${encodeURIComponent(id)}`;
+const itemShowUrl = (id) => `${API.items}/${encodeURIComponent(id)}`;
 
 // --- Calls ---------------------------------------------------
 
@@ -58,5 +59,12 @@ export async function listSalesOrders(params = {}) {
 export async function getSalesOrder(id) {
   const { data } = await http.get(soShowUrl(id));
   // Controller returns { status:'ok', data:{...} } — pass through as-is
+  return data;
+}
+
+/** Get a single item by item_id — used to retrieve stock flags/levels if available */
+export async function getItemDetails(id) {
+  const { data } = await http.get(itemShowUrl(id));
+  // Controller returns { status:'ok', data:{...normalized item...} }
   return data;
 }
