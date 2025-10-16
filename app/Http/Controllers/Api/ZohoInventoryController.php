@@ -127,4 +127,87 @@ class ZohoInventoryController extends Controller
         }
     }
 
+    /**
+     * GET /api/zoho/salesorders
+     * Paginated list of Sales Orders from Zoho Inventory.
+     */
+    public function listSalesOrders(Request $request, ZohoInventoryService $inventory): JsonResponse
+    {
+        $validated = $request->validate([
+            'page'        => ['nullable', 'integer', 'min:1'],
+            'per_page'    => ['nullable', 'integer', 'min:1', 'max:100'],
+            'search'      => ['nullable', 'string', 'max:255'],
+            'status'      => ['nullable', 'string', 'max:50'],      // e.g., "Status.All", "Status.Draft"
+            'sort_column' => ['nullable', 'string', 'in:created_time,date,salesorder_number'],
+            'sort_order'  => ['nullable', 'string', 'in:A,D'],
+        ]);
+
+        try {
+            $result = $inventory->listSalesOrders($validated);
+
+            // Optional thin view model for the table (keep full payload in "raw" if you like)
+            $rows = collect($result['salesorders'])->map(function ($so) {
+                return [
+                    'id'          => $so['salesorder_id'] ?? null,
+                    'number'      => $so['salesorder_number'] ?? null,
+                    'reference'   => $so['reference_number'] ?? null,
+                    'customer'    => $so['customer_name'] ?? null,
+                    'date'        => $so['date'] ?? null,
+                    'status'      => $so['order_status'] ?? ($so['status'] ?? null),
+                    'total'       => $so['total'] ?? null,
+                ];
+            })->all();
+
+            return response()->json([
+                'status'       => 'ok',
+                'filters'      => $validated,
+                'data'         => $rows,
+                'page_context' => $result['page_context'] ?? [],
+            ]);
+        } catch (\Throwable $e) {
+            \Log::error('[Zoho] listSalesOrders failed', [
+                'filters'  => $validated,
+                'message'  => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status'  => 'error',
+                'message' => $e->getMessage(),
+            ], 422);
+        }
+    }
+
+    /**
+     * GET /api/zoho/salesorders/{id}
+     * Full details for a single Sales Order.
+     */
+    public function getSalesOrder(string $id, ZohoInventoryService $inventory): JsonResponse
+    {
+        try {
+            $so = $inventory->getSalesOrder($id);
+
+            if (empty($so)) {
+                return response()->json([
+                    'status'  => 'error',
+                    'message' => 'Sales Order not found.',
+                ], 404);
+            }
+
+            return response()->json([
+                'status' => 'ok',
+                'data'   => $so,
+            ]);
+        } catch (\Throwable $e) {
+            \Log::error('[Zoho] getSalesOrder failed', [
+                'id'      => $id,
+                'message' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status'  => 'error',
+                'message' => $e->getMessage(),
+            ], 422);
+        }
+    }
+
 }

@@ -386,4 +386,55 @@ class ZohoInventoryService
             'message'           => 'Sales Order successfully created in Zoho Inventory.',
         ];
     }
+
+    // ------------------------------------------------------------------
+    // Sales Orders: listing & single fetch
+    // ------------------------------------------------------------------
+
+    /**
+     * List Sales Orders from Zoho Inventory (supports paging/search/sort).
+     *
+     * $opts = [
+     *   'page'        => 1,
+     *   'per_page'    => 25,
+     *   'search'      => null,     // full-text search (reference, number, customer, etc.)
+     *   'status'      => 'Status.All',
+     *   'sort_column' => 'date',   // created_time | date | salesorder_number
+     *   'sort_order'  => 'D',      // A | D
+     * ]
+     *
+     * @return array { salesorders: [], page_context: {} }
+     */
+    public function listSalesOrders(array $opts = []): array
+    {
+        $page  = max(1, (int)($opts['page'] ?? 1));
+        $limit = min(100, max(1, (int)($opts['per_page'] ?? 25)));
+
+        $query = [
+            'page'        => $page,
+            'per_page'    => $limit,
+            'filter_by'   => $opts['status'] ?? 'Status.All',
+            'sort_column' => $opts['sort_column'] ?? 'date',
+            'sort_order'  => $opts['sort_order']  ?? 'D',
+        ];
+
+        if (!empty($opts['search'])) {
+            $query['search_text'] = (string)$opts['search'];
+        }
+
+        $data = $this->request('GET', '/salesorders', ['query' => $query]);
+
+        return [
+            'salesorders'  => $data['salesorders']  ?? [],
+            'page_context' => $data['page_context'] ?? [],
+        ];
+    }
+
+    /** Fetch a single Sales Order by id (full object). */
+    public function getSalesOrder(string $salesorderId): array
+    {
+        $data = $this->request('GET', '/salesorders/' . $salesorderId);
+        return $data['salesorder'] ?? [];
+    }
+
 }

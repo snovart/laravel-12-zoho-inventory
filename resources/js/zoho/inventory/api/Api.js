@@ -20,8 +20,11 @@ export const http = axios.create({
 export const API = {
   health: '/api/zoho/health',
   items: '/api/zoho/items',
-  salesorders: '/api/zoho/salesorders', // POST create SO
+  salesorders: '/api/zoho/salesorders', // POST create SO, GET list
 };
+
+// --- Helpers -------------------------------------------------
+const soShowUrl = (id) => `${API.salesorders}/${encodeURIComponent(id)}`;
 
 // --- Calls ---------------------------------------------------
 
@@ -42,4 +45,18 @@ export async function searchItems(query) {
   const { data } = await http.get(API.items, { params: { q: query } });
   // backend returns { status:'ok', query, data:[...] }
   return Array.isArray(data?.data) ? data.data : [];
+}
+
+/** list sales orders (supports params: page, per_page, query, sort_column, sort_order, etc.) */
+export async function listSalesOrders(params = {}) {
+  const { data } = await http.get(API.salesorders, { params });
+  // отдаём как есть (контроллер вернёт status/data/page_context)
+  return data;
+}
+
+/** get single sales order by ID */
+export async function getSalesOrder(id) {
+  const { data } = await http.get(soShowUrl(id));
+  // контроллер вернёт { status:'ok', data:{...} } — возвращаем как есть
+  return data;
 }
