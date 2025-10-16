@@ -5,9 +5,9 @@
 
 import axios from 'axios';
 
-// Shared Axios instance for Inventory SPA
+// Shared Axios instance for the Inventory SPA
 export const http = axios.create({
-  // baseURL: import.meta.env.VITE_API_BASE_URL ?? '/', // enable if BE on another domain
+  // baseURL: import.meta.env.VITE_API_BASE_URL ?? '/', // enable if BE is on another domain
   withCredentials: true,
   headers: {
     'X-Requested-With': 'XMLHttpRequest',
@@ -20,7 +20,7 @@ export const http = axios.create({
 export const API = {
   health: '/api/zoho/health',
   items: '/api/zoho/items',
-  salesorders: '/api/zoho/salesorders', // POST create SO, GET list
+  salesorders: '/api/zoho/salesorders', // POST creates an SO, GET lists SOs
 };
 
 // --- Helpers -------------------------------------------------
@@ -34,29 +34,29 @@ export async function checkHealth() {
   return data;
 }
 
-/** Create Sales Order draft on backend (payload comes from Pinia store) */
+/** Create Sales Order draft on the backend (payload comes from Pinia store) */
 export async function createSalesOrder(payload) {
   const { data } = await http.post(API.salesorders, payload);
   return data;
 }
 
-/** search items in Zoho Inventory by keyword */
+/** Search items in Zoho Inventory by keyword */
 export async function searchItems(query) {
   const { data } = await http.get(API.items, { params: { q: query } });
-  // backend returns { status:'ok', query, data:[...] }
+  // Backend returns { status:'ok', query, data:[...] }
   return Array.isArray(data?.data) ? data.data : [];
 }
 
-/** list sales orders (supports params: page, per_page, query, sort_column, sort_order, etc.) */
+/** List sales orders (supports params: page, per_page, query, sort_column, sort_order, etc.) */
 export async function listSalesOrders(params = {}) {
   const { data } = await http.get(API.salesorders, { params });
-  // отдаём как есть (контроллер вернёт status/data/page_context)
+  // Return as-is (controller responds with status/data/page_context)
   return data;
 }
 
-/** get single sales order by ID */
+/** Get a single sales order by ID */
 export async function getSalesOrder(id) {
   const { data } = await http.get(soShowUrl(id));
-  // контроллер вернёт { status:'ok', data:{...} } — возвращаем как есть
+  // Controller returns { status:'ok', data:{...} } — pass through as-is
   return data;
 }

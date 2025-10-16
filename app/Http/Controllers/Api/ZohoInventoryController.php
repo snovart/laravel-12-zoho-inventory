@@ -133,47 +133,49 @@ class ZohoInventoryController extends Controller
      */
     public function listSalesOrders(Request $request, ZohoInventoryService $inventory): JsonResponse
     {
-        $validated = $request->validate([
-            'page'        => ['nullable', 'integer', 'min:1'],
-            'per_page'    => ['nullable', 'integer', 'min:1', 'max:100'],
-            'search'      => ['nullable', 'string', 'max:255'],
-            'status'      => ['nullable', 'string', 'max:50'],      // e.g., "Status.All", "Status.Draft"
-            'sort_column' => ['nullable', 'string', 'in:created_time,date,salesorder_number'],
-            'sort_order'  => ['nullable', 'string', 'in:A,D'],
-        ]);
-
         try {
-            $result = $inventory->listSalesOrders($validated);
+            $page       = (int) $request->query('page', 1);
+            $perPage    = (int) $request->query('per_page', 25);
+            $sortCol    = (string) $request->query('sort_column', 'date');
+            $sortOrder  = (string) $request->query('sort_order', 'D');
+            $q          = trim((string) $request->query('q', ''));
 
-            // Optional thin view model for the table (keep full payload in "raw" if you like)
-            $rows = collect($result['salesorders'])->map(function ($so) {
-                return [
-                    'id'          => $so['salesorder_id'] ?? null,
-                    'number'      => $so['salesorder_number'] ?? null,
-                    'reference'   => $so['reference_number'] ?? null,
-                    'customer'    => $so['customer_name'] ?? null,
-                    'date'        => $so['date'] ?? null,
-                    'status'      => $so['order_status'] ?? ($so['status'] ?? null),
-                    'total'       => $so['total'] ?? null,
-                ];
-            })->all();
+            $query = [
+                'page'        => $page,
+                'per_page'    => $perPage,
+                'sort_column' => $sortCol,
+                'sort_order'  => $sortOrder,
+            ];
+
+            // Main fuzzy search (substring across multiple fields)
+            if ($q !== '') {
+                $query['search_text'] = $q;
+
+                // Optional: try an exact match by sales order number if user typed digits like "00024"
+                if (preg_match('/^\d+$/', $q)) {
+                    $query['salesorder_number'] = 'SO-' . str_pad($q, 5, '0', STR_PAD_LEFT);
+                }
+            }
+
+            $res = $inventory->listSalesOrders($query); // -> hits Zoho /salesorders
 
             return response()->json([
                 'status'       => 'ok',
-                'filters'      => $validated,
-                'data'         => $rows,
-                'page_context' => $result['page_context'] ?? [],
+                'data'         => $res['salesorders'] ?? [],
+                'filters'      => [
+                    'page'        => (string) $page,
+                    'per_page'    => (string) $perPage,
+                    'sort_column' => $sortCol,
+                    'sort_order'  => $sortOrder,
+                    'q'           => $q,
+                ],
+                'page_context' => $res['page_context'] ?? [
+                    'page' => $page, 'per_page' => $perPage, 'has_more_page' => false, 'report_name' => 'Sales Orders',
+                ],
             ]);
         } catch (\Throwable $e) {
-            \Log::error('[Zoho] listSalesOrders failed', [
-                'filters'  => $validated,
-                'message'  => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'status'  => 'error',
-                'message' => $e->getMessage(),
-            ], 422);
+            \Log::error('[Zoho] listSalesOrders failed', ['message' => $e->getMessage()]);
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 422);
         }
     }
 

@@ -405,29 +405,11 @@ class ZohoInventoryService
      *
      * @return array { salesorders: [], page_context: {} }
      */
-    public function listSalesOrders(array $opts = []): array
+    public function listSalesOrders(array $params = []): array
     {
-        $page  = max(1, (int)($opts['page'] ?? 1));
-        $limit = min(100, max(1, (int)($opts['per_page'] ?? 25)));
-
-        $query = [
-            'page'        => $page,
-            'per_page'    => $limit,
-            'filter_by'   => $opts['status'] ?? 'Status.All',
-            'sort_column' => $opts['sort_column'] ?? 'date',
-            'sort_order'  => $opts['sort_order']  ?? 'D',
-        ];
-
-        if (!empty($opts['search'])) {
-            $query['search_text'] = (string)$opts['search'];
-        }
-
-        $data = $this->request('GET', '/salesorders', ['query' => $query]);
-
-        return [
-            'salesorders'  => $data['salesorders']  ?? [],
-            'page_context' => $data['page_context'] ?? [],
-        ];
+        // $params may include: page, per_page, search_text, salesorder_number, reference_number, sort_column, sort_order
+        $data = $this->request('GET', '/salesorders', ['query' => $params]);
+        return $data ?? [];
     }
 
     /** Fetch a single Sales Order by id (full object). */
