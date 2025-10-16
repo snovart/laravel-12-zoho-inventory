@@ -1,0 +1,55 @@
+<script setup>
+import { RouterLink } from 'vue-router';
+import CustomerSection from '@inventory/components/CustomerSection.vue';
+import ItemsTable from '@inventory/components/ItemsTable.vue';
+import SummaryBar from '@inventory/components/SummaryBar.vue';
+
+function handleSaveDraft() { console.log('Save as Draft clicked'); }
+function handleSaveSend()  { console.log('Save & Send clicked'); }
+</script>
+
+<template>
+  <div class="min-h-screen bg-gray-50 py-10 px-6">
+    <header class="max-w-6xl mx-auto mb-8 flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl font-bold text-gray-900">Sales Order</h1>
+        <p class="text-sm text-gray-600 mt-1">
+          Create a Sales Order for Zoho Inventory. This page will closely follow Zoho’s UI.
+        </p>
+      </div>
+
+      <!-- link back to /salesorders -->
+      <RouterLink
+        :to="{ name: 'so.list' }"
+        class="px-3 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
+      >
+        Back to list
+      </RouterLink>
+    </header>
+
+    <main class="max-w-6xl mx-auto bg-white shadow rounded-xl p-8 space-y-8">
+      <section>
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Customer</h2>
+        <CustomerSection />
+      </section>
+
+      <section>
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Items</h2>
+        <ItemsTable />
+      </section>
+
+      <section>
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Purchase Orders</h2>
+        <div class="text-gray-500 italic">Purchase Order logic will appear here.</div>
+      </section>
+
+      <section>
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Summary</h2>
+        <SummaryBar
+          @save-draft="handleSaveDraft"         
+          @save-send="handleSaveSend"
+        />
+      </section>
+    </main>
+  </div>
+</template>

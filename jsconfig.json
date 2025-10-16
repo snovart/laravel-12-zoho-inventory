@@ -1,0 +1,19 @@
+{
+  // Compiler options tell VS Code and tools how to resolve import paths
+  "compilerOptions": {
+    // Base path for all relative paths — project root
+    "baseUrl": ".",
+
+    // Aliases for cleaner imports in JS/Vue files
+    "paths": {
+      // "@" maps to the general JS source folder
+      "@/*": ["resources/js/*"],
+
+      // "@inventory" maps directly to the Zoho Inventory frontend module
+      "@inventory/*": ["resources/js/zoho/inventory/*"]
+    }
+  },
+
+  // Folders to ignore when scanning for files or symbols
+  "exclude": ["node_modules", "vendor", "public"]
+}
