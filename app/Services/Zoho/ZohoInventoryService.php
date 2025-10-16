@@ -61,7 +61,7 @@ class ZohoInventoryService
 
         $client = $this->http();
 
-        // $this->logOutbound('REQ', $method, $url, $query, $json);
+        $this->logOutbound('REQ', $method, $url, $query, $json);
 
         $response = match (strtoupper($method)) {
             'GET'    => $client->get($url, $query),
@@ -71,7 +71,7 @@ class ZohoInventoryService
             default  => throw new RuntimeException('Unsupported HTTP method: ' . $method),
         };
 
-        // $this->logInbound('RESP', $method, $url, $response->status(), $response->json(), $response->body());
+        $this->logInbound('RESP', $method, $url, $response->status(), $response->json(), $response->body());
 
         if (!$response->ok()) {
             $body = $response->json();
@@ -143,7 +143,7 @@ class ZohoInventoryService
             $contacts = $found['contacts'] ?? [];
             if (!empty($contacts[0]['contact_id'])) {
                 $id = (string)$contacts[0]['contact_id'];
-                // Log::info('[Zoho] ensureCustomer: found by email', ['email' => $email, 'contact_id' => $id]);
+                Log::info('[Zoho] ensureCustomer: found by email', ['email' => $email, 'contact_id' => $id]);
                 return $id;
             }
         }
@@ -172,14 +172,14 @@ class ZohoInventoryService
 
             if ($exact && !empty($exact['contact_id'])) {
                 $id = (string)$exact['contact_id'];
-                // Log::info('[Zoho] ensureCustomer: exact name match', ['name' => $name, 'contact_id' => $id]);
+                Log::info('[Zoho] ensureCustomer: exact name match', ['name' => $name, 'contact_id' => $id]);
                 return $id;
             }
 
-            // Log::info('[Zoho] ensureCustomer: no exact name match, will create', [
-            //     'name' => $name,
-            //     'candidates_count' => count($contacts),
-            // ]);
+            Log::info('[Zoho] ensureCustomer: no exact name match, will create', [
+                'name' => $name,
+                'candidates_count' => count($contacts),
+            ]);
         }
 
         // 3) Create new contact
@@ -190,15 +190,15 @@ class ZohoInventoryService
         if ($email !== '') $payload['email'] = $email;
         if ($phone !== '') $payload['phone'] = $phone;
 
-        // $this->logOutbound('REQ', 'POST', '/contacts', [], $payload);
+        $this->logOutbound('REQ', 'POST', '/contacts', [], $payload);
         $resp = $this->http()->post('/contacts', $payload);
-        // $this->logInbound('RESP', 'POST', '/contacts', $resp->status(), $resp->json(), $resp->body());
+        $this->logInbound('RESP', 'POST', '/contacts', $resp->status(), $resp->json(), $resp->body());
 
         if ($resp->ok()) {
             $contact = $resp->json()['contact'] ?? null;
             if (!empty($contact['contact_id'])) {
                 $id = (string)$contact['contact_id'];
-                // Log::info('[Zoho] ensureCustomer: created OK', ['contact_id' => $id]);
+                Log::info('[Zoho] ensureCustomer: created OK', ['contact_id' => $id]);
                 return $id;
             }
         } else {
@@ -206,7 +206,7 @@ class ZohoInventoryService
             if (stripos($msg, 'The contact has been added') === false) {
                 throw new RuntimeException('Zoho API error: ' . ($msg ?: $resp->body()));
             }
-            // Log::warning('[Zoho] ensureCustomer: non-2xx but “contact added” — will re-query', ['message' => $msg]);
+            Log::warning('[Zoho] ensureCustomer: non-2xx but “contact added” — will re-query', ['message' => $msg]);
         }
 
         // 4) Re-query (email приоритетно; иначе — точное имя)
@@ -217,7 +217,7 @@ class ZohoInventoryService
             $contacts = $found['contacts'] ?? [];
             if (!empty($contacts[0]['contact_id'])) {
                 $id = (string)$contacts[0]['contact_id'];
-                // Log::info('[Zoho] ensureCustomer: re-query by email got id', ['contact_id' => $id]);
+                Log::info('[Zoho] ensureCustomer: re-query by email got id', ['contact_id' => $id]);
                 return $id;
             }
         }
@@ -236,7 +236,7 @@ class ZohoInventoryService
             foreach ($contacts as $c) {
                 if ($normalized($c['contact_name'] ?? '') === $needle && !empty($c['contact_id'])) {
                     $id = (string)$c['contact_id'];
-                    // Log::info('[Zoho] ensureCustomer: re-query exact name got id', ['contact_id' => $id]);
+                    Log::info('[Zoho] ensureCustomer: re-query exact name got id', ['contact_id' => $id]);
                     return $id;
                 }
             }
@@ -285,13 +285,13 @@ class ZohoInventoryService
         }
 
         // sanity: verify contact exists in this org
-        // $this->logOutbound('REQ', 'GET', '/contacts/' . $sentCustomer);
+        $this->logOutbound('REQ', 'GET', '/contacts/' . $sentCustomer);
         $this->request('GET', '/contacts/' . $sentCustomer);
 
         // post
-        // $this->logOutbound('REQ', 'POST', '/salesorders', [], $body);
+        $this->logOutbound('REQ', 'POST', '/salesorders', [], $body);
         $post = $this->http()->post('/salesorders', $body);
-        // $this->logInbound('RESP', 'POST', '/salesorders', $post->status(), $post->json(), $post->body());
+        $this->logInbound('RESP', 'POST', '/salesorders', $post->status(), $post->json(), $post->body());
 
         $so = null;
 
@@ -310,10 +310,10 @@ class ZohoInventoryService
                 if (!$so) {
                     throw new RuntimeException('Zoho HTTP error: SO was created but cannot be found by reference_number.');
                 }
-                // Log::warning('[Zoho] createSO: non-2xx but created; found by reference', [
-                //     'reference'     => $reference,
-                //     'salesorder_id' => $so['salesorder_id'] ?? null,
-                // ]);
+                Log::warning('[Zoho] createSO: non-2xx but created; found by reference', [
+                    'reference'     => $reference,
+                    'salesorder_id' => $so['salesorder_id'] ?? null,
+                ]);
             } else {
                 throw new RuntimeException('Zoho HTTP error: ' . ($msg ?: $post->body()));
             }
@@ -321,10 +321,10 @@ class ZohoInventoryService
 
         // validate binding
         $gotCustomer = isset($so['customer_id']) ? (string)$so['customer_id'] : '';
-        // Log::info('[Zoho] createSO: customer check', [
-        //     'sent_customer_id' => $sentCustomer,
-        //     'got_customer_id'  => $gotCustomer,
-        // ]);
+        Log::info('[Zoho] createSO: customer check', [
+            'sent_customer_id' => $sentCustomer,
+            'got_customer_id'  => $gotCustomer,
+        ]);
 
         if ($gotCustomer !== $sentCustomer) {
             throw new RuntimeException(
@@ -334,11 +334,11 @@ class ZohoInventoryService
             );
         }
 
-        // Log::info('[Zoho] createSO: final object', [
-        //     'salesorder_id'     => $so['salesorder_id']     ?? null,
-        //     'salesorder_number' => $so['salesorder_number'] ?? null,
-        //     'reference_number'  => $so['reference_number']  ?? null,
-        // ]);
+        Log::info('[Zoho] createSO: final object', [
+            'salesorder_id'     => $so['salesorder_id']     ?? null,
+            'salesorder_number' => $so['salesorder_number'] ?? null,
+            'reference_number'  => $so['reference_number']  ?? null,
+        ]);
 
         return $so;
     }

@@ -39,11 +39,6 @@ function handleSaveSend()  { console.log('Save & Send clicked'); }
       </section>
 
       <section>
-        <h2 class="text-lg font-semibold text-gray-800 mb-4">Purchase Orders</h2>
-        <div class="text-gray-500 italic">Purchase Order logic will appear here.</div>
-      </section>
-
-      <section>
         <h2 class="text-lg font-semibold text-gray-800 mb-4">Summary</h2>
         <SummaryBar
           @save-draft="handleSaveDraft"         

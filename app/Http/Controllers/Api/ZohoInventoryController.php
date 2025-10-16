@@ -52,10 +52,10 @@ class ZohoInventoryController extends Controller
             $items = $inventory->itemsSearch($q);
 
             // Optional debug log (safe content only)
-            // Log::debug('Zoho Inventory item search', [
-            //     'query' => $q,
-            //     'count' => is_array($items) ? count($items) : 0,
-            // ]);
+            Log::debug('Zoho Inventory item search', [
+                'query' => $q,
+                'count' => is_array($items) ? count($items) : 0,
+            ]);
 
             return response()->json([
                 'status' => 'ok',
@@ -173,8 +173,8 @@ class ZohoInventoryController extends Controller
                     'page' => $page, 'per_page' => $perPage, 'has_more_page' => false, 'report_name' => 'Sales Orders',
                 ],
             ]);
-        } catch (\Throwable $e) {
-            \Log::error('[Zoho] listSalesOrders failed', ['message' => $e->getMessage()]);
+        } catch (Throwable $e) {
+            Log::error('[Zoho] listSalesOrders failed', ['message' => $e->getMessage()]);
             return response()->json(['status' => 'error', 'message' => $e->getMessage()], 422);
         }
     }
@@ -199,8 +199,8 @@ class ZohoInventoryController extends Controller
                 'status' => 'ok',
                 'data'   => $so,
             ]);
-        } catch (\Throwable $e) {
-            \Log::error('[Zoho] getSalesOrder failed', [
+        } catch (Throwable $e) {
+            Log::error('[Zoho] getSalesOrder failed', [
                 'id'      => $id,
                 'message' => $e->getMessage(),
             ]);

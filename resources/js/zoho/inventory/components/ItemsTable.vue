@@ -1,3 +1,4 @@
+<!-- resources/js/zoho/inventory/components/ItemsTable.vue -->
 <script setup>
 /**
  * ItemsTable.vue
@@ -8,12 +9,14 @@
  * - Auto-closes results after Add and focuses Qty of the last row
  * - Recomputes totals on every change
  * - Shows stock badges and a "Create PO" toggle when qty exceeds stock
+ * - NEW: plugs usePurchasePlan() and shows a tiny Purchase Orders summary
  */
 
 import { computed, ref, watch, nextTick, onMounted } from 'vue';
 import { useOrderStore } from '@inventory/stores/order';
 import { useItemsSearch } from '@inventory/composables/useItemsSearch';
 import { useItemDetails } from '@inventory/composables/useItemDetails';
+import { usePurchasePlan } from '@inventory/composables/usePurchasePlan'; // NEW
 
 // Pinia store
 const store = useOrderStore();
@@ -30,6 +33,9 @@ const q = ref(''); // query text
 
 // Single-item details composable (API-backed)
 const { getById: getItemById } = useItemDetails(); // exposes async getById(item_id)
+
+// Purchase plan (derived from store; reacts automatically)
+const { plan, totalLines, totalShortQty } = usePurchasePlan(); // NEW
 
 // ------------------------------------------------------------
 // Helpers
@@ -425,6 +431,22 @@ watch(q, (val) => {
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- Purchase Orders summary (derived; not yet creating POs) -->
+    <div class="rounded-lg border border-amber-200 bg-amber-50/40 p-3" v-if="totalLines > 0">
+      <div class="text-sm text-amber-900 font-medium mb-1">
+        Purchase Orders
+      </div>
+      <div class="text-sm text-amber-900">
+        {{ totalLines }} line{{ totalLines === 1 ? '' : 's' }} will be purchased
+        (shortage total: {{ totalShortQty }}).
+      </div>
+      <ul class="mt-2 text-xs text-amber-900/90 list-disc pl-5">
+        <li v-for="p in plan" :key="p.id">
+          {{ p.name }} ({{ p.sku }}) — shortage {{ p.shortage_qty }}
+        </li>
+      </ul>
     </div>
 
     <!-- Footer: actions + totals -->

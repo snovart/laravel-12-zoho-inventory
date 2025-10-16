@@ -4,39 +4,56 @@
  * SummaryBar.vue
  * ------------------------------------------------------------
  * - Shows live totals from the order store (subtotal, tax, total)
- * - Provides actions: Recompute, Check API (health), Save & Send
- * - On successful Sales Order creation:
- *     • shows order number
- *     • redirects to /salesorders/:id
+ * - Provides actions: Recompute, Check API, Save & Send
+ * - Validation:
+ *     • disabled when there are no items
+ *     • on click validates customer.name and customer.email
+ * - Payload on save:
+ *     • customer, items (from store)
+ *     • createPurchaseOrders: boolean
+ *     • purchasePlan: [{ item_id, quantity }]
+ * - Success UX: inline message + redirect to { name: 'so.view', params: { id } }
  */
 
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
 import { useOrderStore } from '@inventory/stores/order';
 
-// Composable for health check (keeps API calls consistent)
+// Health check via composable (как было)
 import { useHealth } from '@inventory/composables/useHealth';
 
-// API call for creating Sales Orders (will be moved to a composable later if needed)
+// API
 import { createSalesOrder } from '@inventory/api/Api';
+
+// План закупок (из флагов create_po в строках)
+import { usePurchasePlan } from '@inventory/composables/usePurchasePlan';
 
 const router = useRouter();
 const order = useOrderStore();
 const { totals, itemCount } = storeToRefs(order);
 
-// Local UI state
+const { plan } = usePurchasePlan(); // [{ id, item_id, name, sku, shortage_qty }]
+const createPurchaseOrders = computed(() =>
+  order.items.some(r => r?.create_po === true)
+);
+
+// UI state
 const busy = ref(false);
 const msg  = ref('');
 
-// Format helper
+// helpers
 const fmt = (n) => Number(n || 0).toFixed(2);
+const isEmpty = (s) => !String(s ?? '').trim();
 
-// Recompute totals manually (store already recomputes on edits)
 const recompute = () => order.recomputeTotals();
 
-// Health check via composable
-const { data: healthData, loading: healthLoading, error: healthError, checkHealth } = useHealth();
+const {
+  data: healthData,
+  loading: healthLoading,
+  error: healthError,
+  checkHealth,
+} = useHealth();
 
 async function doHealth() {
   msg.value = '';
@@ -49,38 +66,71 @@ async function doHealth() {
   }
 }
 
+/** client-side validation before save */
+function validateBeforeSave() {
+  if (itemCount.value === 0) {
+    msg.value = 'Save error: add at least one item.';
+    return false;
+  }
+  if (isEmpty(order.customer?.name)) {
+    msg.value = 'Save error: The customer.name field is required.';
+    return false;
+  }
+  if (isEmpty(order.customer?.email)) {
+    msg.value = 'Save error: The customer.email field is required.';
+    return false;
+  }
+  return true;
+}
+
 /**
- * Save & Send the current draft to backend:
- *  - POST /api/zoho/salesorders
- *  - expects { ok, data: { salesorder_id, salesorder_number }, message }
- *  - on success: show number and redirect to /salesorders/:id
+ * Save & Send:
+ * - формируем payload с purchasePlan
+ * - выводим сообщение внизу
+ * - редиректим на просмотр при success
  */
 async function saveAndSend() {
   msg.value = '';
+
+  if (!validateBeforeSave()) return;
+
   busy.value = true;
 
-  try {
-    // Minimal payload that matches controller validation
-    const payload = {
-      customer: { ...order.customer },
-      items:    [...order.items],
-      createPurchaseOrders: order.createPurchaseOrders,
-    };
+  // формируем purchasePlan для бэкенда: [{ item_id, quantity }]
+  const purchasePlan = plan.value.map(p => ({
+    item_id:  p.item_id,
+    quantity: p.shortage_qty,
+  }));
 
+  const payload = {
+    customer: { ...order.customer },
+    items:    order.items.map(row => ({
+      item_id: row.item_id || row.zoho_item_id || '',
+      qty:     Number(row.qty || 0),
+      rate:    Number(row.rate || 0),
+      tax:     Number(row.tax || 0),
+      name:    row.name ?? '',
+      sku:     row.sku ?? '',
+    })),
+    createPurchaseOrders: createPurchaseOrders.value,
+    purchasePlan,
+  };
+
+  try {
     const res = await createSalesOrder(payload);
-    const soId   = res?.data?.salesorder_id ?? null;
-    const soNo   = res?.data?.salesorder_number ?? null;
+
+    // вытаскиваем ID/номер из разных возможных форм
+    const soId = res?.data?.salesorder_id ?? res?.data?.id ?? res?.id ?? null;
+    const soNo = res?.data?.salesorder_number ?? res?.number ?? null;
     const notice = res?.message ?? 'Sales Order created.';
 
-    // Show a short success message (kept simple)
     msg.value = soNo ? `${notice} (#${soNo}). Redirecting…` : `${notice}. Redirecting…`;
 
-    // Redirect to view page when we have an ID
     if (soId) {
-      // small delay so the user sees the message
       setTimeout(() => {
+        // возвращаем прежнее поведение: именованный роут so.view
         router.push({ name: 'so.view', params: { id: soId } });
-      }, 600);
+      }, 500);
     }
   } catch (e) {
     const apiMsg = e?.response?.data?.message || e?.message || 'Request failed';
