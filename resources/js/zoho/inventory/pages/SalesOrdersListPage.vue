@@ -12,6 +12,7 @@ import { onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
 import { useSalesOrdersList } from '@inventory/composables/useSalesOrdersList';
 import SalesOrdersTable from '@inventory/components/SalesOrdersTable.vue';
+import Pagination from '@inventory/components/Pagination.vue'; // ✅ Added pagination component
 
 // Composable: holds state, params and loader
 const {
@@ -23,20 +24,24 @@ const {
   load,
   setPerPage,
   setQuery,
+  prevPage,
+  nextPage,
 } = useSalesOrdersList({ per_page: 25, sort_column: 'date', sort_order: 'D' });
 
-// Local search box model (we don't reload on every keystroke)
+// Local search box model
 const searchText = ref('');
 
+// Manual search trigger
 function onSearch() {
   setQuery(searchText.value);
 }
 
+// Change number of rows per page
 function onPerPageChange(e) {
   setPerPage(e.target.value);
 }
 
-// Initial load on mount
+// Initial data load
 onMounted(() => {
   load();
 });
@@ -44,6 +49,7 @@ onMounted(() => {
 
 <template>
   <div class="min-h-screen bg-gray-50 py-10 px-6">
+    <!-- Header -->
     <header class="max-w-6xl mx-auto mb-6 flex items-center justify-between">
       <h1 class="text-2xl font-bold text-gray-900">Sales Orders</h1>
 
@@ -64,6 +70,7 @@ onMounted(() => {
       </div>
     </header>
 
+    <!-- Main content -->
     <main class="max-w-6xl mx-auto space-y-4">
       <!-- Search bar -->
       <div class="flex items-center gap-2">
@@ -82,7 +89,7 @@ onMounted(() => {
         </button>
       </div>
 
-      <!-- Error -->
+      <!-- Error message -->
       <div
         v-if="error"
         class="rounded-xl border border-red-200 bg-red-50 p-4 text-red-700"
@@ -93,10 +100,14 @@ onMounted(() => {
       <!-- Table -->
       <SalesOrdersTable :rows="rows" :loading="loading" />
 
-      <!-- Tiny footer to show current page info (optional) -->
-      <div class="text-xs text-gray-500">
-        Page {{ pageContext?.page ?? params.page }}, per page {{ pageContext?.per_page ?? params.per_page }}.
-      </div>
+      <!-- Pagination -->
+      <Pagination
+        :page="pageContext?.page ?? params.page"
+        :hasMore="pageContext?.has_more_page ?? false"
+        :loading="loading"
+        @prev="prevPage"
+        @next="nextPage"
+      />
     </main>
   </div>
 </template>

@@ -3,22 +3,17 @@
 // useSalesOrdersList()
 // ------------------------------------------------------------
 // Fetch and hold a paginated Sales Orders list. Exposes:
-// - rows:           reactive array of orders (flat list)
-// - pageContext:    Zoho-like page context (page, per_page, has_more_page)
-// - loading/error:  request state
-// - params:         query params (q, page, per_page, sort_column, sort_order)
-// - load():         fetch with current params
-// - setPage(n):     change page and refetch
-// - setPerPage(n):  change per_page and refetch
-// - setQuery(q):    change search query and refetch
+// - rows, pageContext, loading, error
+// - params: { q, page, per_page, sort_column, sort_order }
+// - load(), setPage(n), setPerPage(n), setQuery(q)
+// - prevPage(), nextPage()
 // ============================================================
 
-import { ref, reactive } from 'vue';
+import { ref, reactive, computed } from 'vue';
 import { listSalesOrders } from '@inventory/api/Api';
 
 export function useSalesOrdersList(initial = {}) {
-  // Safe defaults
-  const rows = ref([]); // <-- always an array
+  const rows = ref([]);
   const pageContext = ref({
     page: 1,
     per_page: 25,
@@ -29,7 +24,6 @@ export function useSalesOrdersList(initial = {}) {
   const loading = ref(false);
   const error = ref(null);
 
-  // Query/sort params you can bind in the UI
   const params = reactive({
     q: '',
     page: 1,
@@ -51,15 +45,10 @@ export function useSalesOrdersList(initial = {}) {
         sort_order: params.sort_order,
       });
 
-      // Backend returns { status:'ok', data:[...], page_context:{...} }
       rows.value = Array.isArray(res?.data) ? res.data : [];
       if (res?.page_context) {
-        pageContext.value = {
-          ...pageContext.value,
-          ...res.page_context,
-        };
+        pageContext.value = { ...pageContext.value, ...res.page_context };
       } else {
-        // Keep at least page/per_page in sync if server omitted context
         pageContext.value.page = params.page;
         pageContext.value.per_page = params.per_page;
         pageContext.value.has_more_page = false;
@@ -76,7 +65,7 @@ export function useSalesOrdersList(initial = {}) {
   }
 
   function setPage(n) {
-    params.page = Number(n) || 1;
+    params.page = Math.max(1, Number(n) || 1);
     return load();
   }
 
@@ -92,6 +81,22 @@ export function useSalesOrdersList(initial = {}) {
     return load();
   }
 
+  // --- Pagination helpers ------------------------------------
+  const canPrev = computed(() => params.page > 1);
+  const canNext = computed(() => !!(pageContext.value?.has_more_page));
+
+  function prevPage() {
+    if (!canPrev.value) return;
+    params.page -= 1;
+    return load();
+    }
+
+  function nextPage() {
+    if (!canNext.value) return;
+    params.page += 1;
+    return load();
+  }
+
   return {
     rows,
     pageContext,
@@ -102,5 +107,10 @@ export function useSalesOrdersList(initial = {}) {
     setPage,
     setPerPage,
     setQuery,
+    // pagination
+    canPrev,
+    canNext,
+    prevPage,
+    nextPage,
   };
 }
