@@ -4,56 +4,47 @@
  * SummaryBar.vue
  * ------------------------------------------------------------
  * - Shows live totals from the order store (subtotal, tax, total)
- * - Provides actions: Recompute, Check API, Save & Send
- * - Validation:
- *     • disabled when there are no items
- *     • on click validates customer.name and customer.email
- * - Payload on save:
- *     • customer, items (from store)
- *     • createPurchaseOrders: boolean
- *     • purchasePlan: [{ item_id, quantity }]
- * - Success UX: inline message + redirect to { name: 'so.view', params: { id } }
+ * - Provides actions: Recompute, Check API (health), Save & Send
+ * - On successful Sales Order creation:
+ *     • shows order number
+ *     • redirects to /salesorders/:id
+ * - IMPORTANT: We derive the Purchase Order plan locally (via usePurchasePlan)
+ *   and inject it into the payload so createPurchaseOrders + purchasePlan
+ *   are always correct even if the store does not persist them.
  */
 
-import { ref, computed } from 'vue';
+import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
 import { useOrderStore } from '@inventory/stores/order';
 
-// Health check via composable (как было)
+// Composable for health check (keeps API calls consistent)
 import { useHealth } from '@inventory/composables/useHealth';
 
-// API
+// API call for creating Sales Orders
 import { createSalesOrder } from '@inventory/api/Api';
 
-// План закупок (из флагов create_po в строках)
+// PO plan (derived from current items/flags)
 import { usePurchasePlan } from '@inventory/composables/usePurchasePlan';
 
 const router = useRouter();
 const order = useOrderStore();
 const { totals, itemCount } = storeToRefs(order);
 
-const { plan } = usePurchasePlan(); // [{ id, item_id, name, sku, shortage_qty }]
-const createPurchaseOrders = computed(() =>
-  order.items.some(r => r?.create_po === true)
-);
+// Derive the purchase plan reactively
+const { plan } = usePurchasePlan();
 
-// UI state
 const busy = ref(false);
 const msg  = ref('');
 
-// helpers
+// Format helper
 const fmt = (n) => Number(n || 0).toFixed(2);
-const isEmpty = (s) => !String(s ?? '').trim();
 
+// Recompute totals manually (store already recomputes on edits)
 const recompute = () => order.recomputeTotals();
 
-const {
-  data: healthData,
-  loading: healthLoading,
-  error: healthError,
-  checkHealth,
-} = useHealth();
+// Health check via composable
+const { data: healthData, loading: healthLoading, error: healthError, checkHealth } = useHealth();
 
 async function doHealth() {
   msg.value = '';
@@ -66,74 +57,109 @@ async function doHealth() {
   }
 }
 
-/** client-side validation before save */
-function validateBeforeSave() {
-  if (itemCount.value === 0) {
-    msg.value = 'Save error: add at least one item.';
-    return false;
-  }
-  if (isEmpty(order.customer?.name)) {
-    msg.value = 'Save error: The customer.name field is required.';
-    return false;
-  }
-  if (isEmpty(order.customer?.email)) {
-    msg.value = 'Save error: The customer.email field is required.';
-    return false;
-  }
-  return true;
+/**
+ * Normalize API response so we can read fields regardless of whether
+ * Api.js returns the whole AxiosResponse or already its .data.
+ */
+function pickBody(res) {
+  // If it's an AxiosResponse -> res.data; otherwise assume res is already the body
+  const body = res && typeof res === 'object' && 'data' in res ? res.data : res;
+  return body || {};
 }
 
 /**
- * Save & Send:
- * - формируем payload с purchasePlan
- * - выводим сообщение внизу
- * - редиректим на просмотр при success
+ * Extract SO identifiers defensively from multiple possible shapes:
+ *  - body.data.salesorder_id / body.data.salesorder_number
+ *  - body.data.raw.salesorder_id / body.data.raw.salesorder_number
+ *  - body.salesorder_id / body.salesorder_number
+ */
+function extractSoIds(body) {
+  const data = body?.data ?? {};
+  const raw  = data?.raw ?? body?.raw ?? {};
+
+  const soId =
+    data?.salesorder_id ??
+    raw?.salesorder_id ??
+    body?.salesorder_id ??
+    null;
+
+  const soNo =
+    data?.salesorder_number ??
+    raw?.salesorder_number ??
+    body?.salesorder_number ??
+    null;
+
+  return { soId, soNo };
+}
+
+/**
+ * Save & Send the current draft to backend:
+ *  - POST /api/zoho/salesorders
+ *  - expects { status, message, data: { salesorder_id, salesorder_number } }
+ *  - on success: show number and redirect to /salesorders/:id
  */
 async function saveAndSend() {
   msg.value = '';
 
-  if (!validateBeforeSave()) return;
+  // Frontend safety checks (keep old behavior)
+  if (itemCount.value === 0) {
+    msg.value = 'Save error: Add at least one item.';
+    return;
+  }
+  const name  = (order.customer?.name  || '').trim();
+  const email = (order.customer?.email || '').trim();
+  if (!name || !email) {
+    msg.value = 'Save error: The customer.name and customer.email fields are required.';
+    return;
+  }
+
+  // Build PO plan for payload based on current items and create_po flags.
+  // We intentionally do this here to avoid relying on store persistence.
+  const planArray = Array.isArray(plan.value)
+    ? plan.value
+        .filter(p => p && p.item_id && Number(p.shortage_qty) > 0)
+        .map(p => ({
+          item_id: String(p.item_id),
+          quantity: Number(p.shortage_qty),
+        }))
+    : [];
+
+  // True if there is anything to purchase
+  const createPO = planArray.length > 0;
 
   busy.value = true;
 
-  // формируем purchasePlan для бэкенда: [{ item_id, quantity }]
-  const purchasePlan = plan.value.map(p => ({
-    item_id:  p.item_id,
-    quantity: p.shortage_qty,
-  }));
-
-  const payload = {
-    customer: { ...order.customer },
-    items:    order.items.map(row => ({
-      item_id: row.item_id || row.zoho_item_id || '',
-      qty:     Number(row.qty || 0),
-      rate:    Number(row.rate || 0),
-      tax:     Number(row.tax || 0),
-      name:    row.name ?? '',
-      sku:     row.sku ?? '',
-    })),
-    createPurchaseOrders: createPurchaseOrders.value,
-    purchasePlan,
-  };
-
   try {
-    const res = await createSalesOrder(payload);
+    // Minimal payload that matches controller validation
+    const payload = {
+      customer: { ...order.customer },
+      items:    [...order.items],
+      // Use derived plan/flag instead of relying on unset store fields
+      createPurchaseOrders: createPO,
+      purchasePlan: planArray,
+    };
 
-    // вытаскиваем ID/номер из разных возможных форм
-    const soId = res?.data?.salesorder_id ?? res?.data?.id ?? res?.id ?? null;
-    const soNo = res?.data?.salesorder_number ?? res?.number ?? null;
-    const notice = res?.message ?? 'Sales Order created.';
+    const res  = await createSalesOrder(payload);
+    const body = pickBody(res);
 
-    msg.value = soNo ? `${notice} (#${soNo}). Redirecting…` : `${notice}. Redirecting…`;
+    const { soId, soNo } = extractSoIds(body);
+
+    const notice = body?.message || 'Sales Order created';
+    msg.value = soNo ? `${notice}. Redirecting…` : `${notice}. Redirecting…`;
 
     if (soId) {
       setTimeout(() => {
-        // возвращаем прежнее поведение: именованный роут so.view
         router.push({ name: 'so.view', params: { id: soId } });
-      }, 500);
+      }, 600);
+    } else {
+      // Fallback: if ID not returned, keep message and do not redirect
+      msg.value = body?.message || 'Sales Order created, but no ID returned.';
     }
   } catch (e) {
-    const apiMsg = e?.response?.data?.message || e?.message || 'Request failed';
+    const apiMsg =
+      e?.response?.data?.message ||
+      e?.message ||
+      'Request failed';
     msg.value = `Save error: ${apiMsg}`;
   } finally {
     busy.value = false;

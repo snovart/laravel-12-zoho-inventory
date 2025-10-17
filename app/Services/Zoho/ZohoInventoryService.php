@@ -73,7 +73,8 @@ class ZohoInventoryService
 
         $this->logInbound('RESP', $method, $url, $response->status(), $response->json(), $response->body());
 
-        if (!$response->ok()) {
+        // IMPORTANT: use ->successful() (2xx) instead of ->ok() (only 200).
+        if (!$response->successful()) {
             $body = $response->json();
             $msg  = is_array($body) ? ($body['message'] ?? $response->body()) : $response->body();
             throw new RuntimeException('Zoho API error: ' . $msg);
@@ -148,9 +149,8 @@ class ZohoInventoryService
             }
         }
 
-        // 2) Safe exact by name (Zoho иногда возвращает несвязанный список)
+        // 2) Safe exact by name (Zoho sometimes returns unrelated list)
         if ($name !== '') {
-            // используем search_text, затем фильтруем точным сравнением contact_name
             $found = $this->request('GET', '/contacts', [
                 'query' => ['search_text' => $name, 'page' => 1, 'per_page' => 50],
             ]);
@@ -194,7 +194,7 @@ class ZohoInventoryService
         $resp = $this->http()->post('/contacts', $payload);
         $this->logInbound('RESP', 'POST', '/contacts', $resp->status(), $resp->json(), $resp->body());
 
-        if ($resp->ok()) {
+        if ($resp->successful()) {
             $contact = $resp->json()['contact'] ?? null;
             if (!empty($contact['contact_id'])) {
                 $id = (string)$contact['contact_id'];
@@ -209,7 +209,7 @@ class ZohoInventoryService
             Log::warning('[Zoho] ensureCustomer: non-2xx but “contact added” — will re-query', ['message' => $msg]);
         }
 
-        // 4) Re-query (email приоритетно; иначе — точное имя)
+        // 4) Re-query (email preferred; otherwise exact name)
         if ($email !== '') {
             $found = $this->request('GET', '/contacts', [
                 'query' => ['email' => $email, 'page' => 1, 'per_page' => 2],
@@ -295,7 +295,7 @@ class ZohoInventoryService
 
         $so = null;
 
-        if ($post->ok()) {
+        if ($post->successful()) {
             $so = $post->json()['salesorder'] ?? null;
             if (!$so) {
                 throw new RuntimeException('Zoho API: empty salesorder in a successful response.');
@@ -391,39 +391,210 @@ class ZohoInventoryService
     // Sales Orders: listing & single fetch
     // ------------------------------------------------------------------
 
-    /**
-     * List Sales Orders from Zoho Inventory (supports paging/search/sort).
-     *
-     * $opts = [
-     *   'page'        => 1,
-     *   'per_page'    => 25,
-     *   'search'      => null,     // full-text search (reference, number, customer, etc.)
-     *   'status'      => 'Status.All',
-     *   'sort_column' => 'date',   // created_time | date | salesorder_number
-     *   'sort_order'  => 'D',      // A | D
-     * ]
-     *
-     * @return array { salesorders: [], page_context: {} }
-     */
     public function listSalesOrders(array $params = []): array
     {
-        // $params may include: page, per_page, search_text, salesorder_number, reference_number, sort_column, sort_order
         $data = $this->request('GET', '/salesorders', ['query' => $params]);
         return $data ?? [];
     }
 
-    /** Fetch a single Sales Order by id (full object). */
     public function getSalesOrder(string $salesorderId): array
     {
         $data = $this->request('GET', '/salesorders/' . $salesorderId);
         return $data['salesorder'] ?? [];
     }
 
-    /** Fetch a single item by item_id (full Zoho payload). */
     public function getItem(string $itemId): array
     {
         $data = $this->request('GET', '/items/' . $itemId);
         return $data['item'] ?? [];
     }
 
+    // ------------------------------------------------------------------
+    // Purchase Orders (NEW)
+    // ------------------------------------------------------------------
+
+    /**
+     * Create Purchase Orders from a purchase plan.
+     * The plan is an array of rows: [{ item_id: string, quantity: number }]
+     * Rows are grouped by preferred_vendor_id/vendor_id; one PO is created per vendor.
+     *
+     * @param array $plan
+     * @param array $options  Optional: ['salesorder_id' => '...'] to mention SO in PO reference/notes.
+     * @return array
+     */
+    public function createPurchaseOrdersFromPlan(array $plan, array $options = []): array
+    {
+        $result = [
+            'created' => [],
+            'skipped' => [],
+        ];
+
+        if (empty($plan) || !is_array($plan)) {
+            return $result;
+        }
+
+        // Local item cache to reduce API calls
+        $itemCache = [];
+
+        // Group rows by vendor and aggregate duplicate items
+        $byVendor = []; // vendor_id => ['items' => [item_id => ['quantity'=>float, 'rate'=>float|null]], 'vendor_id'=>string]
+
+        foreach ($plan as $row) {
+            $itemId = (string) ($row['item_id'] ?? '');
+            $qty    = (float)  ($row['quantity'] ?? 0);
+
+            if ($itemId === '' || $qty <= 0) {
+                $result['skipped'][] = [
+                    'item_id'  => $itemId ?: null,
+                    'quantity' => $qty,
+                    'reason'   => 'bad_row',
+                ];
+                continue;
+            }
+
+            try {
+                if (!isset($itemCache[$itemId])) {
+                    $itemCache[$itemId] = $this->getItem($itemId);
+                }
+                $item = $itemCache[$itemId];
+            } catch (\Throwable $e) {
+                Log::warning('[Zoho] getItem failed while building PO plan', [
+                    'item_id' => $itemId,
+                    'message' => $e->getMessage(),
+                ]);
+                $result['skipped'][] = [
+                    'item_id'  => $itemId,
+                    'quantity' => $qty,
+                    'reason'   => 'get_item_failed',
+                ];
+                continue;
+            }
+
+            $vendorId = $item['preferred_vendor_id'] ?? $item['vendor_id'] ?? null;
+            if (!$vendorId) {
+                $result['skipped'][] = [
+                    'item_id'  => $itemId,
+                    'quantity' => $qty,
+                    'reason'   => 'no_preferred_vendor',
+                ];
+                continue;
+            }
+
+            $rate = null;
+            if (isset($item['purchase_rate']) && is_numeric($item['purchase_rate'])) {
+                $rate = (float) $item['purchase_rate'];
+            } elseif (isset($item['rate']) && is_numeric($item['rate'])) {
+                $rate = (float) $item['rate'];
+            }
+
+            if (!isset($byVendor[$vendorId])) {
+                $byVendor[$vendorId] = ['vendor_id' => $vendorId, 'items' => []];
+            }
+            if (!isset($byVendor[$vendorId]['items'][$itemId])) {
+                $byVendor[$vendorId]['items'][$itemId] = ['quantity' => 0.0, 'rate' => $rate];
+            }
+            $byVendor[$vendorId]['items'][$itemId]['quantity'] += $qty;
+            if ($byVendor[$vendorId]['items'][$itemId]['rate'] === null && $rate !== null) {
+                $byVendor[$vendorId]['items'][$itemId]['rate'] = $rate;
+            }
+        }
+
+        if (!$byVendor) {
+            Log::info('[Zoho] purchasePlan contained no vendor-bound lines; nothing to create');
+            return $result;
+        }
+
+        $soId = isset($options['salesorder_id']) ? (string)$options['salesorder_id'] : '';
+
+        foreach ($byVendor as $vendorId => $bucket) {
+            $rows = [];
+            foreach ($bucket['items'] as $iid => $meta) {
+                $row = [
+                    'item_id'  => $iid,
+                    'quantity' => (float) $meta['quantity'],
+                ];
+                if ($meta['rate'] !== null) {
+                    $row['rate'] = (float) $meta['rate'];
+                }
+                $rows[] = $row;
+            }
+
+            $payload = $this->buildPurchaseOrderPayload($vendorId, $rows, $soId);
+
+            try {
+                // request() now treats 201 as success because of ->successful()
+                $resp = $this->request('POST', '/purchaseorders', ['json' => $payload]);
+
+                $po   = $resp['purchaseorder'] ?? $resp ?? [];
+                $poId = $po['purchaseorder_id']     ?? null;
+                $poNo = $po['purchaseorder_number'] ?? null;
+
+                Log::info('[Zoho] PO created: summary', [
+                    'vendor_id' => $vendorId,
+                    'purchaseorder_id' => $poId,
+                    'purchaseorder_number' => $poNo,
+                ]);
+
+                $result['created'][] = [
+                    'purchaseorder_id'     => $poId,
+                    'purchaseorder_number' => $poNo,
+                    'vendor_id'            => $vendorId,
+                    'lines'                => array_values($rows),
+                ];
+            } catch (\Throwable $e) {
+                Log::error('[Zoho] create PO failed', [
+                    'vendor_id' => $vendorId,
+                    'payload'   => $payload,
+                    'message'   => $e->getMessage(),
+                ]);
+
+                foreach ($rows as $li) {
+                    $result['skipped'][] = [
+                        'item_id'  => $li['item_id'],
+                        'quantity' => $li['quantity'],
+                        'reason'   => 'po_create_failed',
+                    ];
+                }
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Build minimal Zoho Purchase Order payload for a single vendor.
+     * Extend here if you need: delivery date, warehouse, custom fields, etc.
+     *
+     * @param string $vendorId
+     * @param array  $rows       Each row: ['item_id'=>..., 'quantity'=>..., 'rate'?=>...]
+     * @param string $soId       Optional Sales Order id to reference in PO.
+     * @return array
+     */
+    private function buildPurchaseOrderPayload(string $vendorId, array $rows, string $soId = ''): array
+    {
+        $lineItems = [];
+        foreach ($rows as $r) {
+            $one = [
+                'item_id'  => $r['item_id'],
+                'quantity' => (float) $r['quantity'],
+            ];
+            if (isset($r['rate'])) {
+                $one['rate'] = (float) $r['rate']; // pass purchase rate when we know it
+            }
+            $lineItems[] = $one;
+        }
+
+        $payload = [
+            'vendor_id'  => $vendorId,
+            'line_items' => $lineItems,
+        ];
+
+        // Light backlink to SO is useful for operators
+        if ($soId !== '') {
+            $payload['reference_number'] = 'SO:' . $soId . ' / ' . now()->format('YmdHis');
+            $payload['notes']            = 'Auto-created from Sales Order ' . $soId;
+        }
+
+        return $payload;
+    }
 }

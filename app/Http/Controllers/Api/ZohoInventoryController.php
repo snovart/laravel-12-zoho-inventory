@@ -7,6 +7,7 @@ use App\Services\Zoho\ZohoInventoryService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Arr;
 use Throwable;
 
 /**
@@ -76,53 +77,89 @@ class ZohoInventoryController extends Controller
     }
 
     /**
-     * POST /api/zoho/salesorders
-     * Creates a Sales Order in Zoho Inventory.
+     * Create Sales Order in Zoho Inventory.
+     * Accepts extended payload:
+     *   - createPurchaseOrders: bool
+     *   - purchasePlan: [{ item_id: string, quantity: number }]
+     *
+     * On success may also create Purchase Orders based on purchasePlan.
      */
-    public function createSalesOrder(Request $request, ZohoInventoryService $zi)
+    public function createSalesOrder(Request $request, ZohoInventoryService $zoho): JsonResponse
     {
-        // Validate SPA payload
-        $payload = $request->validate([
-            'customer' => ['required', 'array'],
-            'customer.name'  => ['required', 'string', 'max:255'],
-            'customer.email' => ['nullable', 'email'],
-            'customer.phone' => ['nullable', 'string', 'max:50'],
+        // --- Validate incoming payload (keep existing shape) -----------------
+        $validated = $request->validate([
+            'customer.name'  => ['required','string','max:255'],
+            'customer.email' => ['required','email','max:255'],
+            'customer.phone' => ['nullable','string','max:255'],
 
-            'items'   => ['required', 'array', 'min:1'],
-            'items.*.item_id' => ['required', 'string'],   // IMPORTANT: item_id is required
-            'items.*.name'    => ['required', 'string', 'max:255'],
-            'items.*.sku'     => ['nullable', 'string', 'max:255'],
-            'items.*.qty'     => ['required', 'numeric', 'min:0.001'],
-            'items.*.rate'    => ['required', 'numeric', 'min:0'],
-            'items.*.tax'     => ['nullable', 'numeric', 'min:0'],
-            'createPurchaseOrders' => ['sometimes', 'boolean'],
+            'items'                  => ['required','array','min:1'],
+            'items.*.item_id'        => ['required','string'],
+            'items.*.name'           => ['required','string'],
+            'items.*.sku'            => ['nullable','string'],
+            'items.*.qty'            => ['required','numeric','min:0.0001'],
+            'items.*.rate'           => ['required','numeric'],
+            'items.*.tax'            => ['nullable','numeric'],
+            
+            'createPurchaseOrders'   => ['sometimes','boolean'],
+            'purchasePlan'           => ['sometimes','array'],
+            'purchasePlan.*.item_id' => ['required_with:createPurchaseOrders','string'],
+            'purchasePlan.*.quantity'=> ['required_with:createPurchaseOrders','numeric','min:0.0001'],
         ]);
 
+        $createPO     = (bool) Arr::get($validated, 'createPurchaseOrders', false);
+        $purchasePlan = Arr::get($validated, 'purchasePlan', []);
+
         try {
-            // Single entry point that handles reference_number + Zoho quirks
-            $res = $zi->createSalesOrder($payload);
+            // --- Create SO in Zoho -----------------------------------------
+            $soResponse = $zoho->createSalesOrder($validated);
 
-            return response()->json([
-                'ok' => true,
-                'message' => $res['message'] ?? 'Sales Order created',
-                'data' => [
-                    'salesorder_id'     => $res['salesorder_id'] ?? null,
-                    'salesorder_number' => $res['salesorder_number'] ?? null,
-                    'reference_number'  => $res['reference_number'] ?? null,
-                    'customer_id'       => $res['customer_id'] ?? null,
+            Log::info('Zoho SO create: response', [
+                'endpoint' => 'salesorders',
+                'response' => $soResponse,
+            ]);
+
+            // Normalize for frontend (keep previous contract)
+            $soId   = data_get($soResponse, 'salesorder.salesorder_id');
+            $soNo   = data_get($soResponse, 'salesorder.salesorder_number');
+            $statusMessage = 'Sales Order created';
+
+            $result = [
+                'status'  => 'ok',
+                'message' => $soNo ? "{$statusMessage} (#{$soNo})" : $statusMessage,
+                'data'    => [
+                    'salesorder_id'      => $soId,
+                    'salesorder_number'  => $soNo,
+                    'raw'                => $soResponse, // leave raw for inspection if needed
                 ],
-            ], 201);
+            ];
 
-        } catch (Throwable $e) {
-            Log::error('Zoho Inventory sales order creation failed', [
-                'customer_name' => $payload['customer']['name'] ?? null,
-                'items_count'   => count($payload['items'] ?? []),
-                'message'       => $e->getMessage(),
+            // --- Optionally create POs based on purchase plan --------------
+            if ($createPO && is_array($purchasePlan) && count($purchasePlan) > 0) {
+                $poReport = $zoho->createPurchaseOrdersFromPlan($purchasePlan);
+
+                Log::info('Zoho PO create: summary', [
+                    'summary' => $poReport,
+                ]);
+
+                $result['purchase_orders'] = $poReport;
+                if (!empty($poReport['created'])) {
+                    $result['message'] .= ' • Purchase Orders created';
+                }
+                if (!empty($poReport['skipped'])) {
+                    $result['message'] .= ' • Some items skipped (no vendor)';
+                }
+            }
+
+            return response()->json($result, 201);
+        } catch (\Throwable $e) {
+            Log::error('Zoho SO create: exception', [
+                'exception' => $e->getMessage(),
+                'trace'     => $e->getTraceAsString(),
             ]);
 
             return response()->json([
-                'ok'      => false,
-                'message' => 'Zoho API error: ' . $e->getMessage(),
+                'status'  => 'error',
+                'message' => $e->getMessage() ?: 'Failed to create Sales Order',
             ], 422);
         }
     }
