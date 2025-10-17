@@ -22,3 +22,27 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# --- Laravel caches ---
+/bootstrap/cache/*
+!/bootstrap/cache/.gitignore
+
+# --- Laravel storage (но оставляем .gitignore-файлы) ---
+/storage/app/*
+/storage/framework/*
+/storage/logs/*
+!/storage/.gitignore
+!/storage/app/.gitignore
+!/storage/framework/.gitignore
+!/storage/logs/.gitignore
+
+# --- env-файлы ---
+.env.*
+!.env.example
+
+# --- логи package-менеджеров ---
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
