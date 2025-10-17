@@ -117,7 +117,7 @@ class ZohoInventoryController extends Controller
                 'response' => $soResponse,
             ]);
 
-            // Normalize for frontend
+            // Normalize for frontend (single source of truth)
             // Service returns flat keys; fallback to nested path just in case.
             $soId = data_get($soResponse, 'salesorder_id')
                  ?? data_get($soResponse, 'salesorder.salesorder_id');
@@ -125,16 +125,20 @@ class ZohoInventoryController extends Controller
                  ?? data_get($soResponse, 'salesorder.salesorder_number');
 
             $statusMessage = 'Sales Order created';
+
             $result = [
                 'status'  => 'ok',
                 'message' => $soNo ? "{$statusMessage} (#{$soNo})" : $statusMessage,
                 'data'    => [
                     'salesorder_id'     => $soId,
                     'salesorder_number' => $soNo,
-                    // Keep raw for debugging/inspection
-                    'raw'               => $soResponse,
                 ],
             ];
+
+            // Include raw response only in debug to avoid duplication in production.
+            if (config('app.debug')) {
+                $result['data']['raw'] = $soResponse; // debugging/inspection only
+            }
 
             // Optionally create POs based on purchase plan
             if ($createPO && is_array($purchasePlan) && count($purchasePlan) > 0) {
