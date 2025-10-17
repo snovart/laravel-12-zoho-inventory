@@ -38,11 +38,15 @@ class ZohoInventoryService
     // Low-level helpers + logging
     // ------------------------------------------------------------------
 
+    /**
+     * Build a configured HTTP client for Zoho Inventory.
+     * Adds conditional retry/backoff based on $this->retryPolicy.
+     */
     protected function http(): PendingRequest
     {
         $token = $this->auth->getAccessToken();
 
-        return Http::withHeaders([
+        $client = Http::withHeaders([
                 'Authorization'             => 'Zoho-oauthtoken ' . $token,
                 'X-com-zoho-organizationid' => $this->organizationId,
                 'Accept'                    => 'application/json',
@@ -51,6 +55,44 @@ class ZohoInventoryService
             ->baseUrl(rtrim($this->inventoryBaseUrl, '/'))
             ->timeout($this->timeoutMs / 1000)
             ->withQueryParameters(['organization_id' => $this->organizationId]);
+
+        // Add retry/backoff depending on policy
+        [$times, $sleepMs] = $this->retryConfig();
+        if ($times > 0) {
+            // Retry on 429 and typical transient 5xx.
+            // Laravel's Http::retry callback receives ($exception, $request, $response).
+            $shouldRetry = function ($exception, $request, $response) {
+                try {
+                    $status = $response ? $response->status() : null;
+                } catch (\Throwable $e) {
+                    $status = null;
+                }
+                return in_array($status, [429, 500, 502, 503, 504], true);
+            };
+
+            $client = $client->retry($times, $sleepMs, $shouldRetry);
+        }
+
+        return $client;
+    }
+
+    /**
+     * Map retry policy to concrete numbers.
+     * - none        => no retries
+     * - standard    => 3 retries, 300ms backoff
+     * - aggressive  => 5 retries, 600ms backoff
+     */
+    protected function retryConfig(): array
+    {
+        switch (strtolower($this->retryPolicy)) {
+            case 'none':
+                return [0, 0];
+            case 'aggressive':
+                return [5, 600];
+            case 'standard':
+            default:
+                return [3, 300];
+        }
     }
 
     protected function request(string $method, string $path, array $options = []): array
