@@ -1,11 +1,27 @@
 <script setup>
-import { RouterLink } from 'vue-router';
-import CustomerSection from '@inventory/components/CustomerSection.vue';
-import ItemsTable from '@inventory/components/ItemsTable.vue';
-import SummaryBar from '@inventory/components/SummaryBar.vue';
+/**
+ * SalesOrderCreatePage.vue
+ * ------------------------------------------------------------
+ * Page that renders the Sales Order creation form.
+ * Now resets the Pinia order store on mount so that items from
+ * the previous draft don't leak into a new order.
+ */
+import { onMounted } from 'vue'
+import { RouterLink } from 'vue-router'
+import CustomerSection from '@inventory/components/CustomerSection.vue'
+import ItemsTable from '@inventory/components/ItemsTable.vue'
+import SummaryBar from '@inventory/components/SummaryBar.vue'
+import { useOrderStore } from '@inventory/stores/order'
 
-function handleSaveDraft() { console.log('Save as Draft clicked'); }
-function handleSaveSend()  { console.log('Save & Send clicked'); }
+// Reset state when opening "New" page to avoid stale draft lines
+const order = useOrderStore()
+onMounted(() => {
+  // Hard reset: clears customer, items, totals, flags
+  order.reset()
+})
+
+function handleSaveDraft () { console.log('Save as Draft clicked') }
+function handleSaveSend  () { console.log('Save & Send clicked') }
 </script>
 
 <template>
@@ -41,7 +57,7 @@ function handleSaveSend()  { console.log('Save & Send clicked'); }
       <section>
         <h2 class="text-lg font-semibold text-gray-800 mb-4">Summary</h2>
         <SummaryBar
-          @save-draft="handleSaveDraft"         
+          @save-draft="handleSaveDraft"
           @save-send="handleSaveSend"
         />
       </section>
