@@ -6,12 +6,12 @@
 //  - data:   response payload (org info, etc.)
 //  - loading / error flags
 //  - run():  trigger the request
+//  - checkHealth(): alias of run() for components that call it by name
 // ============================================================
 
 import { ref } from 'vue';
-// ВАЖНО: путь и имя файла API — как у тебя в проекте.
-// Используем тот же экспорт, что и в api/Api.js
-import { checkHealth } from '@inventory/api/Api';
+// IMPORTANT: keep same API import path as in your project
+import { checkHealth as apiCheckHealth } from '@inventory/api/Api';
 
 export function useHealth() {
   const data = ref(null);
@@ -22,14 +22,17 @@ export function useHealth() {
     loading.value = true;
     error.value = null;
     try {
-      data.value = await checkHealth();
+      data.value = await apiCheckHealth();
     } catch (e) {
-      // аккуратно достанем message
+      // pull a readable message safely
       error.value = e?.response?.data?.message || e?.message || 'Health check failed';
     } finally {
       loading.value = false;
     }
   }
 
-  return { data, loading, error, run };
+  // Alias to keep existing components working (SummaryBar expects checkHealth)
+  const checkHealth = run;
+
+  return { data, loading, error, run, checkHealth };
 }
