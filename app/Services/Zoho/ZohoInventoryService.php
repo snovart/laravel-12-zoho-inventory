@@ -10,10 +10,9 @@ use RuntimeException;
 /**
  * ZohoInventoryService with deep logging & safe name lookup
  *
- * - Всегда передаём organization_id и в query, и в заголовке.
- * - Логируем ВСЕ шаги (поиск/создание контакта и создание SO).
- * - По имени принимаем ТОЛЬКО точное совпадение contact_name;
- *   иначе — создаём контакт, чтобы не привязывать «левого» customer.
+ * - Always pass organization_id in both query and header.
+ * - Log ALL steps (contact search/create and SO creation).
+ * - For name search accept ONLY exact contact_name to avoid wrong bindings.
  */
 class ZohoInventoryService
 {
@@ -60,7 +59,6 @@ class ZohoInventoryService
         [$times, $sleepMs] = $this->retryConfig();
         if ($times > 0) {
             // Retry on 429 and typical transient 5xx.
-            // Laravel's Http::retry callback receives ($exception, $request, $response).
             $shouldRetry = function ($exception, $request, $response) {
                 try {
                     $status = $response ? $response->status() : null;
@@ -115,7 +113,7 @@ class ZohoInventoryService
 
         $this->logInbound('RESP', $method, $url, $response->status(), $response->json(), $response->body());
 
-        // IMPORTANT: use ->successful() (2xx) instead of ->ok() (only 200).
+        // IMPORTANT: treat any 2xx as success
         if (!$response->successful()) {
             $body = $response->json();
             $msg  = is_array($body) ? ($body['message'] ?? $response->body()) : $response->body();
@@ -167,6 +165,7 @@ class ZohoInventoryService
     /**
      * Ensure a customer exists and return contact_id.
      * Email → exact; Name → exact match only (safe); else create + re-query.
+     * Additionally: ensure email/phone and primary contact presence when provided.
      */
     public function ensureCustomer(array $customer): string
     {
@@ -187,6 +186,17 @@ class ZohoInventoryService
             if (!empty($contacts[0]['contact_id'])) {
                 $id = (string)$contacts[0]['contact_id'];
                 Log::info('[Zoho] ensureCustomer: found by email', ['email' => $email, 'contact_id' => $id]);
+
+                // Enrichment: make sure core email/phone and a primary contact with email exist
+                try {
+                    $this->enrichContactEmailAndPrimary($id, $name, $email, $phone);
+                } catch (\Throwable $e) {
+                    Log::warning('[Zoho] ensureCustomer enrichment (found-by-email) failed', [
+                        'contact_id' => $id,
+                        'message'    => $e->getMessage(),
+                    ]);
+                }
+
                 return $id;
             }
         }
@@ -215,6 +225,17 @@ class ZohoInventoryService
             if ($exact && !empty($exact['contact_id'])) {
                 $id = (string)$exact['contact_id'];
                 Log::info('[Zoho] ensureCustomer: exact name match', ['name' => $name, 'contact_id' => $id]);
+
+                // Enrichment: align email/phone and ensure a primary contact with email
+                try {
+                    $this->enrichContactEmailAndPrimary($id, $name, $email, $phone);
+                } catch (\Throwable $e) {
+                    Log::warning('[Zoho] ensureCustomer enrichment (exact-name) failed', [
+                        'contact_id' => $id,
+                        'message'    => $e->getMessage(),
+                    ]);
+                }
+
                 return $id;
             }
 
@@ -232,6 +253,15 @@ class ZohoInventoryService
         if ($email !== '') $payload['email'] = $email;
         if ($phone !== '') $payload['phone'] = $phone;
 
+        // Important: many Zoho UIs display email via primary contact.
+        if ($email !== '') {
+            $payload['contact_persons'] = [[
+                'first_name'         => $name !== '' ? $name : 'Customer',
+                'email'              => $email,
+                'is_primary_contact' => true,
+            ]];
+        }
+
         $this->logOutbound('REQ', 'POST', '/contacts', [], $payload);
         $resp = $this->http()->post('/contacts', $payload);
         $this->logInbound('RESP', 'POST', '/contacts', $resp->status(), $resp->json(), $resp->body());
@@ -240,6 +270,17 @@ class ZohoInventoryService
             $contact = $resp->json()['contact'] ?? null;
             if (!empty($contact['contact_id'])) {
                 $id = (string)$contact['contact_id'];
+
+                // Post-create enrichment (defensive)
+                try {
+                    $this->enrichContactEmailAndPrimary($id, $name, $email, $phone);
+                } catch (\Throwable $e) {
+                    Log::warning('[Zoho] ensureCustomer: post-create enrichment failed', [
+                        'contact_id' => $id,
+                        'message'    => $e->getMessage(),
+                    ]);
+                }
+
                 Log::info('[Zoho] ensureCustomer: created OK', ['contact_id' => $id]);
                 return $id;
             }
@@ -259,6 +300,17 @@ class ZohoInventoryService
             $contacts = $found['contacts'] ?? [];
             if (!empty($contacts[0]['contact_id'])) {
                 $id = (string)$contacts[0]['contact_id'];
+
+                // Defensive enrichment again
+                try {
+                    $this->enrichContactEmailAndPrimary($id, $name, $email, $phone);
+                } catch (\Throwable $e) {
+                    Log::warning('[Zoho] ensureCustomer: re-query enrichment failed', [
+                        'contact_id' => $id,
+                        'message'    => $e->getMessage(),
+                    ]);
+                }
+
                 Log::info('[Zoho] ensureCustomer: re-query by email got id', ['contact_id' => $id]);
                 return $id;
             }
@@ -278,6 +330,16 @@ class ZohoInventoryService
             foreach ($contacts as $c) {
                 if ($normalized($c['contact_name'] ?? '') === $needle && !empty($c['contact_id'])) {
                     $id = (string)$c['contact_id'];
+
+                    try {
+                        $this->enrichContactEmailAndPrimary($id, $name, $email, $phone);
+                    } catch (\Throwable $e) {
+                        Log::warning('[Zoho] ensureCustomer: re-query (name) enrichment failed', [
+                            'contact_id' => $id,
+                            'message'    => $e->getMessage(),
+                        ]);
+                    }
+
                     Log::info('[Zoho] ensureCustomer: re-query exact name got id', ['contact_id' => $id]);
                     return $id;
                 }
@@ -290,6 +352,63 @@ class ZohoInventoryService
     public function findOrCreateContact(array $customer): array
     {
         return ['contact_id' => $this->ensureCustomer($customer)];
+    }
+
+    /**
+     * Enrich an existing contact with provided email/phone and ensure there is a primary contact with email.
+     * Uses PUT /contacts/{id} with a minimal diff.
+     */
+    private function enrichContactEmailAndPrimary(string $contactId, string $name, string $email, string $phone = ''): void
+    {
+        if ($contactId === '') return;
+
+        $contact = $this->getContact($contactId);
+        $update  = [];
+        $need    = false;
+
+        // Align top-level email if provided and different
+        $zohoEmail = trim((string)($contact['email'] ?? ''));
+        if ($email !== '' && $email !== $zohoEmail) {
+            $update['email'] = $email;
+            $need = true;
+        }
+
+        // Align top-level phone if provided and empty at Zoho
+        $zohoPhone = trim((string)($contact['phone'] ?? ''));
+        if ($phone !== '' && $zohoPhone === '') {
+            $update['phone'] = $phone;
+            $need = true;
+        }
+
+        // Ensure there is a primary contact with email
+        if ($email !== '') {
+            $persons = $contact['contact_persons'] ?? [];
+            $hasPrimaryEmail = false;
+            foreach ($persons as $p) {
+                if (!empty($p['is_primary_contact']) && trim((string)($p['email'] ?? '')) !== '') {
+                    $hasPrimaryEmail = true;
+                    break;
+                }
+            }
+            if (!$hasPrimaryEmail) {
+                $update['contact_persons'] = [[
+                    'first_name'         => $name !== '' ? $name : 'Customer',
+                    'email'              => $email,
+                    'is_primary_contact' => true,
+                ]];
+                $need = true;
+            }
+        }
+
+        if ($need) {
+            $this->logOutbound('REQ', 'PUT', '/contacts/' . $contactId, [], $update);
+            $updResp = $this->http()->withQueryParameters([])->put('/contacts/' . $contactId, $update);
+            $this->logInbound('RESP', 'PUT', '/contacts/' . $contactId, $updResp->status(), $updResp->json(), $updResp->body());
+            if (!$updResp->successful()) {
+                $msg = (string) (($updResp->json()['message'] ?? '') ?: $updResp->body());
+                throw new RuntimeException('Contact enrichment failed: ' . $msg);
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -564,7 +683,6 @@ class ZohoInventoryService
             $payload = $this->buildPurchaseOrderPayload($vendorId, $rows, $soId);
 
             try {
-                // request() now treats 201 as success because of ->successful()
                 $resp = $this->request('POST', '/purchaseorders', ['json' => $payload]);
 
                 $po   = $resp['purchaseorder'] ?? $resp ?? [];
@@ -640,6 +758,25 @@ class ZohoInventoryService
         return $payload;
     }
 
+    /**
+     * Search contacts in Zoho Inventory by name or email.
+     *
+     * Uses `/contacts` with `search_text`, which matches against multiple fields
+     * (e.g., contact name, email). The response is normalized to always include
+     * a `contacts` array and a `page_context` block, so the caller doesn't have
+     * to guard for missing keys.
+     *
+     * Notes:
+     * - `page` is 1-based (Zoho convention).
+     * - `per_page` is subject to Zoho limits (commonly up to 200).
+     * - This method throws on any non-2xx API response.
+     *
+     * @param  string $q        Free-text query (name/email fragment).
+     * @param  int    $page     Page number (1-based).
+     * @param  int    $perPage  Page size.
+     * @return array{contacts: array<int, array<string,mixed>>, page_context: array<string,mixed>}
+     * @throws \RuntimeException On API errors.
+     */
     public function contactsSearch(string $q, int $page = 1, int $perPage = 20): array
     {
         // Zoho Contacts search; use search_text to allow name/email search
@@ -657,6 +794,17 @@ class ZohoInventoryService
         ];
     }
 
+    /**
+     * Retrieve a single contact by its Zoho `contact_id`.
+     *
+     * Thin wrapper over `GET /contacts/{contact_id}`. Returns the raw contact
+     * object from Zoho (or an empty array if the key is missing, which should
+     * only happen on unexpected payload shapes; API errors will throw).
+     *
+     * @param  string $contactId  Zoho contact identifier.
+     * @return array<string,mixed> Contact payload as returned by Zoho.
+     * @throws \RuntimeException   On API errors.
+     */
     public function getContact(string $contactId): array
     {
         $data = $this->request('GET', '/contacts/' . $contactId);
