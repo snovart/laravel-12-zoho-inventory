@@ -1,61 +1,112 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Laravel 12 + Zoho Inventory (Vue 3 SPA)
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+This project provides a modern Laravel 12 backend integrated with the **Zoho Inventory API**, and a Vue 3 (Composition API) SPA frontend.  
+It includes endpoints, composables, and UI components to simulate Zoho’s “Sales Orders” workflow.
 
-## About Laravel
+---
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## 📁 Project structure
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+resources/js/zoho/inventory/
+│
+├── api/
+│   └── Api.js                   # Centralized API layer (axios client)
+│
+├── composables/
+│   ├── useHealth.js             # GET /api/zoho/health
+│   ├── useItemDetails.js        # GET /api/zoho/items/:id
+│   ├── useItemsSearch.js        # Search items
+│   ├── usePurchasePlan.js       # Compute PO plan from order items
+│   ├── useSalesOrderView.js     # GET /api/zoho/salesorders/:id
+│   ├── useSalesOrders.js        # POST /api/zoho/salesorders
+│   └── useSalesOrdersList.js    # GET /api/zoho/salesorders
+│
+├── components/
+│   ├── CustomerSection.vue      # Basic customer info form
+│   ├── ItemsTable.vue           # Item list with qty/price inputs
+│   ├── SummaryBar.vue           # Totals + actions (Save & Send, Health)
+│   └── SalesOrdersTable.vue     # Table of sales orders list
+│
+├── pages/
+│   ├── SalesOrderListPage.vue   # List page (uses SalesOrdersTable)
+│   └── SalesOrderCreatePage.vue # Create form (Customer + Items + Summary)
+│
+└── stores/
+    └── order.js                 # Pinia store for current order
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+---
 
-## Learning Laravel
+## ⚙️ Backend routes (Laravel)
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+GET    /api/zoho/health
+GET    /api/zoho/items?q=term
+GET    /api/zoho/items/{id}
+GET    /api/zoho/salesorders
+GET    /api/zoho/salesorders/{id}
+POST   /api/zoho/salesorders
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+All routes are handled by `App\Http\Controllers\Api\ZohoInventoryController`,  
+which proxies requests to `App\Services\Zoho\ZohoInventoryService`.
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+---
 
-## Laravel Sponsors
+## 🧠 Key frontend logic
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+- **Pinia store** `useOrderStore()` holds customer data, items, and totals.
+- **ItemsTable** dynamically adds products fetched from `/api/zoho/items`.
+- **SummaryBar** performs save/send to create a Sales Order in Zoho via Laravel.
+- **useHealth()** calls the `/health` endpoint to test API connectivity.
+- **usePurchasePlan()** derives purchase order requirements from shortages.
 
-### Premium Partners
+---
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+## 🧪 Running locally
 
-## Contributing
+1. **Install dependencies**
+   ```bash
+   composer install
+   npm install
+   ```
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+2. **Set environment**
+   ```bash
+   cp .env.example .env
+   php artisan key:generate
+   ```
 
-## Code of Conduct
+3. **Configure Zoho API credentials**
+   ```
+   ZOHO_CLIENT_ID=
+   ZOHO_CLIENT_SECRET=
+   ZOHO_REFRESH_TOKEN=
+   ZOHOINV_ORGANIZATION_ID=
+   ZOHOINV_BASE_URL=https://inventory.zoho.eu/api/v1
+   ```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+4. **Run migrations & serve**
+   ```bash
+   php artisan migrate
+   php artisan serve
+   ```
 
-## Security Vulnerabilities
+5. **Build frontend**
+   ```bash
+   npm run dev
+   ```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+---
 
-## License
+## 🧩 CI/CD
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+See `.github/workflows/ci.yml` for automated pipeline:
+- Checks out repository
+- Installs PHP + Node dependencies
+- Runs migrations (SQLite)
+- Builds frontend
+- Runs tests (if present)
+- Uploads built assets as GitHub artifact
+
+---
+
+## 🧾 License
+MIT — free to use, modify, and distribute.
