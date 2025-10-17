@@ -26,6 +26,7 @@ export const API = {
 // --- Helpers -------------------------------------------------
 const soShowUrl = (id) => `${API.salesorders}/${encodeURIComponent(id)}`;
 const itemShowUrl = (id) => `${API.items}/${encodeURIComponent(id)}`;
+const contactShowUrl = (id) => `/api/zoho/contacts/${encodeURIComponent(id)}`;
 
 // --- Calls ---------------------------------------------------
 
@@ -68,3 +69,15 @@ export async function getItemDetails(id) {
   // Controller returns { status:'ok', data:{...normalized item...} }
   return data;
 }
+
+export async function searchContacts(query, page = 1, per_page = 20) {
+  const { data } = await http.get('/api/zoho/contacts', { params: { q: query, page, per_page } });
+  return data; // { status:'ok', data:[...], page_context:{...} }
+}
+
+// Get a single contact with persons to extract primary email
+export async function getContact(id) {
+  const { data } = await http.get(contactShowUrl(id));
+  return data; // { status:'ok', data:{...} }
+}
+

@@ -297,4 +297,56 @@ class ZohoInventoryController extends Controller
             ], 422);
         }
     }
+
+    public function contacts(Request $request, \App\Services\Zoho\ZohoInventoryService $inventory): \Illuminate\Http\JsonResponse
+    {
+        $q       = trim((string) $request->query('q', ''));
+        $page    = (int) $request->query('page', 1);
+        $perPage = (int) $request->query('per_page', 20);
+
+        if ($q === '') {
+            return response()->json(['status' => 'ok', 'data' => [], 'page_context' => [
+                'page' => 1, 'per_page' => $perPage, 'has_more_page' => false, 'report_name' => 'Contacts',
+            ]]);
+        }
+
+        try {
+            $res = $inventory->contactsSearch($q, $page, $perPage);
+
+            // Normalize to a compact list for the UI
+            $list = array_map(static function ($c) {
+                return [
+                    'contact_id'   => (string)($c['contact_id'] ?? ''),
+                    'contact_name' => (string)($c['contact_name'] ?? ''),
+                    'email'        => (string)($c['email'] ?? ''),
+                    'company_name' => (string)($c['company_name'] ?? ''),
+                ];
+            }, $res['contacts'] ?? []);
+
+            return response()->json([
+                'status'       => 'ok',
+                'data'         => $list,
+                'page_context' => $res['page_context'] ?? [
+                    'page' => $page, 'per_page' => $perPage, 'has_more_page' => false, 'report_name' => 'Contacts',
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            \Log::error('[Zoho] contacts search failed', ['message' => $e->getMessage()]);
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    public function getContact(string $id, ZohoInventoryService $inventory): JsonResponse
+    {
+        try {
+            $contact = $inventory->getContact($id);
+            if (empty($contact)) {
+                return response()->json(['status'=>'error','message'=>'Contact not found.'], 404);
+            }
+            return response()->json(['status'=>'ok','data'=>$contact]);
+        } catch (\Throwable $e) {
+            return response()->json(['status'=>'error','message'=>$e->getMessage()], 422);
+        }
+    }
+
 }

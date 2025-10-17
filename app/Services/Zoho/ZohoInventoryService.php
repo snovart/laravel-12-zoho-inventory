@@ -639,4 +639,28 @@ class ZohoInventoryService
 
         return $payload;
     }
+
+    public function contactsSearch(string $q, int $page = 1, int $perPage = 20): array
+    {
+        // Zoho Contacts search; use search_text to allow name/email search
+        $data = $this->request('GET', '/contacts', [
+            'query' => [
+                'search_text' => $q,
+                'page'        => $page,
+                'per_page'    => $perPage,
+            ],
+        ]);
+
+        return [
+            'contacts'     => $data['contacts']     ?? [],
+            'page_context' => $data['page_context'] ?? ['page' => $page, 'per_page' => $perPage, 'has_more_page' => false],
+        ];
+    }
+
+    public function getContact(string $contactId): array
+    {
+        $data = $this->request('GET', '/contacts/' . $contactId);
+        return $data['contact'] ?? [];
+    }
+
 }

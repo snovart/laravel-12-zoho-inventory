@@ -10,5 +10,7 @@ Route::prefix('zoho')->group(function () {
     Route::get('/salesorders', [ZohoInventoryController::class, 'listSalesOrders']);
     Route::get('/salesorders/{id}',  [ZohoInventoryController::class, 'getSalesOrder']);
     Route::get('/items/{id}', [ZohoInventoryController::class, 'getItem']);
+    Route::get('/contacts', [ZohoInventoryController::class, 'contacts']);
+    Route::get('/contacts/{id}', [ZohoInventoryController::class, 'getContact']);
 });
 
