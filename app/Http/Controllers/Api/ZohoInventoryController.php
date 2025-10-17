@@ -52,7 +52,6 @@ class ZohoInventoryController extends Controller
         try {
             $items = $inventory->itemsSearch($q);
 
-            // Optional debug log (safe content only)
             Log::debug('Zoho Inventory item search', [
                 'query' => $q,
                 'count' => is_array($items) ? count($items) : 0,
@@ -86,7 +85,7 @@ class ZohoInventoryController extends Controller
      */
     public function createSalesOrder(Request $request, ZohoInventoryService $zoho): JsonResponse
     {
-        // --- Validate incoming payload (keep existing shape) -----------------
+        // Validate incoming payload (keep existing shape)
         $validated = $request->validate([
             'customer.name'  => ['required','string','max:255'],
             'customer.email' => ['required','email','max:255'],
@@ -99,7 +98,7 @@ class ZohoInventoryController extends Controller
             'items.*.qty'            => ['required','numeric','min:0.0001'],
             'items.*.rate'           => ['required','numeric'],
             'items.*.tax'            => ['nullable','numeric'],
-            
+
             'createPurchaseOrders'   => ['sometimes','boolean'],
             'purchasePlan'           => ['sometimes','array'],
             'purchasePlan.*.item_id' => ['required_with:createPurchaseOrders','string'],
@@ -110,7 +109,7 @@ class ZohoInventoryController extends Controller
         $purchasePlan = Arr::get($validated, 'purchasePlan', []);
 
         try {
-            // --- Create SO in Zoho -----------------------------------------
+            // Create SO in Zoho
             $soResponse = $zoho->createSalesOrder($validated);
 
             Log::info('Zoho SO create: response', [
@@ -118,28 +117,32 @@ class ZohoInventoryController extends Controller
                 'response' => $soResponse,
             ]);
 
-            // Normalize for frontend (keep previous contract)
-            $soId   = data_get($soResponse, 'salesorder.salesorder_id');
-            $soNo   = data_get($soResponse, 'salesorder.salesorder_number');
-            $statusMessage = 'Sales Order created';
+            // Normalize for frontend
+            // Service returns flat keys; fallback to nested path just in case.
+            $soId = data_get($soResponse, 'salesorder_id')
+                 ?? data_get($soResponse, 'salesorder.salesorder_id');
+            $soNo = data_get($soResponse, 'salesorder_number')
+                 ?? data_get($soResponse, 'salesorder.salesorder_number');
 
+            $statusMessage = 'Sales Order created';
             $result = [
                 'status'  => 'ok',
                 'message' => $soNo ? "{$statusMessage} (#{$soNo})" : $statusMessage,
                 'data'    => [
-                    'salesorder_id'      => $soId,
-                    'salesorder_number'  => $soNo,
-                    'raw'                => $soResponse, // leave raw for inspection if needed
+                    'salesorder_id'     => $soId,
+                    'salesorder_number' => $soNo,
+                    // Keep raw for debugging/inspection
+                    'raw'               => $soResponse,
                 ],
             ];
 
-            // --- Optionally create POs based on purchase plan --------------
+            // Optionally create POs based on purchase plan
             if ($createPO && is_array($purchasePlan) && count($purchasePlan) > 0) {
-                $poReport = $zoho->createPurchaseOrdersFromPlan($purchasePlan);
-
-                Log::info('Zoho PO create: summary', [
-                    'summary' => $poReport,
+                $poReport = $zoho->createPurchaseOrdersFromPlan($purchasePlan, [
+                    'salesorder_id' => (string) ($soId ?? ''),
                 ]);
+
+                Log::info('Zoho PO create: summary', ['summary' => $poReport]);
 
                 $result['purchase_orders'] = $poReport;
                 if (!empty($poReport['created'])) {
@@ -184,17 +187,16 @@ class ZohoInventoryController extends Controller
                 'sort_order'  => $sortOrder,
             ];
 
-            // Main fuzzy search (substring across multiple fields)
             if ($q !== '') {
                 $query['search_text'] = $q;
 
-                // Optional: try an exact match by sales order number if user typed digits like "00024"
+                // Optional exact SO number helper
                 if (preg_match('/^\d+$/', $q)) {
                     $query['salesorder_number'] = 'SO-' . str_pad($q, 5, '0', STR_PAD_LEFT);
                 }
             }
 
-            $res = $inventory->listSalesOrders($query); // -> hits Zoho /salesorders
+            $res = $inventory->listSalesOrders($query);
 
             return response()->json([
                 'status'       => 'ok',
@@ -261,21 +263,18 @@ class ZohoInventoryController extends Controller
                 ], 404);
             }
 
-            // Normalize/minify the payload for the frontend
+            // Compact payload for the frontend
             $item = [
-                'item_id'               => $raw['item_id'] ?? $id,
-                'name'                  => $raw['name'] ?? ($raw['item_name'] ?? ''),
-                'sku'                   => $raw['sku'] ?? ($raw['product_code'] ?? ''),
-                'rate'                  => $raw['rate'] ?? ($raw['selling_price'] ?? 0),
-                'track_inventory'       => (bool)($raw['track_inventory'] ?? false),
-                'can_be_sold'           => (bool)($raw['can_be_sold'] ?? true),
-                'can_be_purchased'      => (bool)($raw['can_be_purchased'] ?? false),
-
-                // Stock-related fields appear only for inventory-tracked items.
-                // We pass them if present; otherwise they will be null.
-                'available_stock'       => $raw['available_stock']        ?? ($raw['actual_available_stock'] ?? null),
-                'actual_available_stock'=> $raw['actual_available_stock'] ?? null,
-                'physical_stock'        => $raw['physical_stock']         ?? null,
+                'item_id'                => $raw['item_id'] ?? $id,
+                'name'                   => $raw['name'] ?? ($raw['item_name'] ?? ''),
+                'sku'                    => $raw['sku'] ?? ($raw['product_code'] ?? ''),
+                'rate'                   => $raw['rate'] ?? ($raw['selling_price'] ?? 0),
+                'track_inventory'        => (bool)($raw['track_inventory'] ?? false),
+                'can_be_sold'            => (bool)($raw['can_be_sold'] ?? true),
+                'can_be_purchased'       => (bool)($raw['can_be_purchased'] ?? false),
+                'available_stock'        => $raw['available_stock']        ?? ($raw['actual_available_stock'] ?? null),
+                'actual_available_stock' => $raw['actual_available_stock'] ?? null,
+                'physical_stock'         => $raw['physical_stock']         ?? null,
             ];
 
             return response()->json([
@@ -294,5 +293,4 @@ class ZohoInventoryController extends Controller
             ], 422);
         }
     }
-
 }
